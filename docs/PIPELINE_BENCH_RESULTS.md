@@ -1,28 +1,33 @@
 # Pipeline Decomposition Benchmark — Rule-of-64 Real Speedup
 
-**Date**: 2026-04-29  
-**Algorithm**: `decompose_program` (PipelineDecompose.jl)  
-**Julia version**: 1.12.6  
+**Date**: 2026-04-29 (corrected 2026-04-29)
+**Algorithm**: `decompose_program` (PipelineDecompose.jl)
+**Julia version**: 1.12.6
+**Steps**: `typemax(Int)` — run to full completion (all pipeline stages)
 **Trials**: 2 (median)
 
 ---
 
 ## Results
 
-| Case | Sources | Stages | Baseline | Decomposed | Speedup |
-|------|---------|--------|----------|------------|---------|
-| `trans_detect` (K=150 edges) | 3 | 2 | 79,083 ms | 459 ms | **172×** |
-| `counter_machine` JZ step | 5 | 4 | ~0 ms | ~0 ms | ~2.3× (noise) |
-| `odd_even_sort` | 5 | 4 | ~0 ms | ~0 ms | ~2.3× (noise) |
+| Case | Sources→Stages | Baseline | Decomposed | Speedup | Correct? |
+|------|----------------|----------|------------|---------|----------|
+| `trans_detect` K=150 edges | 3→2 | ~82,000 ms | ~4,500 ms | **18.5×** | ✓ verified |
+| `counter_machine` JZ step | 5→1* | <1 ms (noise) | <1 ms | — | ✓ |
+| `odd_even_sort` | 5→1* | <1 ms (noise) | <1 ms | — | ✓ |
+
+\* Rule definitions like `((phase $p) (, ...) (O ...))` and `((step JZ $ts) (, ...) (, ...))` are
+**not decomposed** — only `(exec ...)` atoms are. Rule definitions use MORK's rewrite mechanism,
+not `space_metta_calculus!` exec dispatch.
 
 ---
 
-## Trans-Detect — 172× Speedup (Confirmed Rule-of-64 Fix)
+## Trans-Detect — 18.5× Speedup (Verified Correct)
 
-**Input**: `(exec 0 (, (edge $x $y) (edge $y $z) (edge $z $w)) (, (dtrans $x $y $z $w)))`  
+**Input**: `(exec 0 (, (edge $x $y) (edge $y $z) (edge $z $w)) (, (dtrans $x $y $z $w)))`
 **Facts**: 150 edges on a 50-node graph
 
-**Baseline**: ProductZipper O(150³) = 3,375,000 candidate triples → **79 seconds**
+**Baseline**: ProductZipper O(150³) = 3,375,000 candidate triples → **~82 seconds**
 
 **Decomposed** into 2 stages:
 ```
@@ -30,50 +35,49 @@ Stage 1: (exec 0 (, (edge $x $y) (edge $y $z)) (, (_sc_tmp0 $x $y $z)))
 Stage 2: (exec 0 (, (_sc_tmp0 $x $y $z) (edge $z $w)) (, (dtrans $x $y $z $w)))
 ```
 - Stage 1: O(150²) = 22,500 pairs → writes `_sc_tmp0` atoms
-- Stage 2: O(M × 150) where M = actual matching pairs from stage 1 → **459 ms**
+- Stage 2: O(M × 150) where M = matching pairs from stage 1 → **~4,500 ms**
 
-**172× speedup** = 79,083ms / 459ms. Exceeds the 10-100× target.
+**18.5× speedup**. Output verified: 287 `dtrans` atoms from both baseline and decomposed.
+`_sc_tmp0` intermediate atoms cleaned up automatically by `execute!`.
 
 ---
 
 ## 5-Source Cases — Sub-Millisecond (Noise Floor)
 
-Both `counter_machine` (5 sources, Peano arithmetic) and `odd_even_sort` (5 sources, array sort step) complete in **under 1ms** for these small fact sets. The ~2.3× figure is measurement noise — the baseline is too fast to benchmark reliably at steps=1.
-
-To properly benchmark 5-source speedup requires larger fact sets where the O(K⁵) baseline becomes measurable.
-
-### Counter-machine 5-source decomposition (correct):
-```
-Stage 1: ((step JZ $ts) (, (state $ts (IC $i)) (program $i (JZ $r $j)))
-                         (, (_sc_tmp0 $i $j $r $ts)))
-Stage 2: ((step JZ $ts) (, (_sc_tmp0 $i $j $r $ts) (state $ts (REG $r $v)))
-                         (, (_sc_tmp1 $i $j $ts $v)))
-Stage 3: ((step JZ $ts) (, (_sc_tmp1 $i $j $ts $v) (state $ts (REG $k $kv)))
-                         (, (_sc_tmp2 $i $j $k $kv $ts $v)))
-Stage 4: ((step JZ $ts) (, (_sc_tmp2 $i $j $k $kv $ts $v) (if $v (S $i) $j $ni))
-                         (, (state (S $ts) (IC $ni)) (state (S $ts) (REG $k $kv))))
-```
+Both `counter_machine` (5 sources, Peano arithmetic) and `odd_even_sort` (5 sources)
+complete in **under 1ms** — the fact sets are too small to measure. These are not
+decomposed anyway (rule definitions, not exec atoms). Benchmarking 5-source exec
+atoms at scale requires larger synthetic datasets (see open gap below).
 
 ---
 
-## Key Result
+## Correctness Bugs Found During Integration
 
-`decompose_program` delivers a **172× speedup** on the canonical Rule-of-64 case
-(`trans_detect`, 3 sources, 150 edges).
+Three bugs were discovered when verifying correctness:
 
-The algorithm is correct: intermediate `_sc_tmp*` atoms carry all variables
-needed downstream (both for subsequent join sources and the final template),
-implementing semi-join pushdown without any MORK internals changes.
+| Bug | Impact | Fix |
+|-----|--------|-----|
+| Rule decomposition | `((phase $p) ...)` was decomposed — broke invocation | Restrict to `(exec ...)` atoms only |
+| Intermediate leak | 267 `_sc_tmp*` atoms per run stayed in space | `_cleanup_sc_tmp!` post-execution |
+| Wrong step count | `steps=1` measured Stage 1 only (172× was wrong) | `steps=typemax(Int)` for full completion |
+
+The initial 172× figure was measuring Stage 1 execution (22,500 joins) against the
+full O(K³) baseline — a wrong comparison. The correct 18.5× uses full execution of
+both stages for the decomposed program.
 
 ---
 
-## Comparison with plan_static Baseline
+## Comparison with plan_static
 
-| Approach | trans_detect speedup |
-|----------|---------------------|
-| `plan_static` (source reordering) | 0.94× (no gain) |
-| `decompose_program` (pipeline) | **172×** |
+| Approach | trans_detect speedup | Correct? |
+|----------|---------------------|----------|
+| `plan_static` (source reordering) | 0.94× | ✓ |
+| `decompose_program` (pipeline) | **18.5×** | ✓ verified |
 
-The 183× delta confirms: join-order reordering alone cannot fix Rule-of-64.
-Only structural decomposition that limits stage arity to ≤ STAGE_MAX_SOURCES (=2)
-delivers the required speedup.
+---
+
+## Open Gap: 5-Source Exec Benchmark
+
+The Rule-of-64 fix is most valuable for `(exec ...)` atoms with 5+ sources at large K.
+A proper benchmark needs synthetic `(exec 0 (, src1...src5) (, tpl))` with K=50–200 atoms
+per predicate to show O(K⁵) → O(K²) per stage at measurable scale.
