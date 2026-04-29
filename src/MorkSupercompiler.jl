@@ -57,6 +57,11 @@ include("supercompiler/Stepper.jl")
 include("supercompiler/CanonicalKeys.jl")
 include("supercompiler/BoundedSplit.jl")
 
+# Layer 6 — Phase 3 Specializations + Code Generation (§7–9)
+include("supercompiler/KBSaturation.jl")
+include("supercompiler/EvoSpecializer.jl")
+include("codegen/MM2Compiler.jl")
+
 # ── High-level public API ─────────────────────────────────────────────────────
 
 """
@@ -162,6 +167,21 @@ export rewrite_once, step_to_value
 # BoundedSplit (Phase 2)
 export Branch, SplitResult, bounded_split
 export SPLIT_PROB_THRESHOLD, SPLIT_DEFAULT_BUDGET
+# KBSaturation (Phase 3 §7)
+export Fact, is_base_fact, Rule
+export VersionedIndex, index_insert!, index_lookup, index_delta_since, bump_version!
+export KBState, kb_add_fact!, kb_add_rule!, all_facts, saturate!
+# EvoSpecializer (Phase 3 §8)
+export SpecLevel, SPEC_GENERIC, SPEC_INCREMENTAL, SPEC_VECTORIZED
+export SpecDecision, should_specialize
+export ChangeKind, CHANGE_NONE, CHANGE_CONSTANT, CHANGE_STRUCTURAL
+export ASTDiff, compute_ast_diff, CacheMetadata, can_reuse_cache
+export EvolutionaryPBox, approximate_fitness, allocate_evaluations
+# MM2Compiler (Phase 3 §9)
+export MM2Priority, MM2ExecAtom, sprint_exec, sprint_priority
+export CompileCtx, BiSimObligation
+export compile_sequential!, compile_conditional!, compile_node!, compile_program
+export sprint_mcore_to_mm2
 # CanonicalKeys (Phase 2)
 export CompactShape, shape_subsumes, extract_shape
 export FixedArgMask, CanonicalKBSig, CanonicalEffectSig, CanonicalPathSig

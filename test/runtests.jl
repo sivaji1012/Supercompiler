@@ -550,4 +550,194 @@ end
     @test SPLIT_DEFAULT_BUDGET == 16
 end
 
+
+# ── §11 KBSaturation — Algorithm 11 (§7.1) ────────────────────────────────────
+
+@testset "KBSaturation — base facts + VersionedIndex" begin
+    g  = MCoreGraph()
+    kb = KBState(g)
+
+    id1 = add_con!(g, Con(:parent, [add_sym!(g, Sym(:alice)), add_sym!(g, Sym(:bob))]))
+    id2 = add_con!(g, Con(:parent, [add_sym!(g, Sym(:bob)),   add_sym!(g, Sym(:carol))]))
+    kb_add_fact!(kb, id1)
+    kb_add_fact!(kb, id2)
+
+    @test length(index_lookup(kb.index, :parent)) == 2
+    @test length(all_facts(kb)) == 2
+    @test length(kb.delta) == 2   # both in delta before saturation
+end
+
+@testset "KBSaturation — saturate! reaches fixed point" begin
+    g  = MCoreGraph()
+    kb = KBState(g)
+
+    # Fact: (parent alice bob)
+    id_alice = add_sym!(g, Sym(:alice))
+    id_bob   = add_sym!(g, Sym(:bob))
+    id_carol = add_sym!(g, Sym(:carol))
+    id_p1    = add_con!(g, Con(:parent, [id_alice, id_bob]))
+    id_p2    = add_con!(g, Con(:parent, [id_bob,   id_carol]))
+    kb_add_fact!(kb, id_p1)
+    kb_add_fact!(kb, id_p2)
+
+    # Rule: (parent X Y) ∧ (parent Y Z) → (ancestor X Z)
+    id_vx    = add_var!(g, Var(0))
+    id_vy    = add_var!(g, Var(1))
+    id_vz    = add_var!(g, Var(2))
+    id_body1 = add_con!(g, Con(:parent, [id_vx, id_vy]))
+    id_body2 = add_con!(g, Con(:parent, [id_vy, id_vz]))
+    id_head  = add_con!(g, Con(:ancestor, [id_vx, id_vz]))
+    rule_id  = add_sym!(g, Sym(:ancestor_rule))
+    rule     = Rule(id_head, [id_body1, id_body2], rule_id)
+    kb_add_rule!(kb, rule)
+
+    n_new = saturate!(kb; max_rounds=10)
+    @test n_new >= 1   # at least (ancestor alice carol) derived
+
+    anc_facts = index_lookup(kb.index, :ancestor)
+    @test length(anc_facts) >= 1
+end
+
+@testset "KBSaturation — idempotent (second saturate! adds nothing)" begin
+    g  = MCoreGraph()
+    kb = KBState(g)
+
+    id_a = add_con!(g, Con(:fact, [add_sym!(g, Sym(:a))]))
+    kb_add_fact!(kb, id_a)
+    saturate!(kb; max_rounds=5)
+
+    n2 = saturate!(kb; max_rounds=5)
+    @test n2 == 0   # no rules → fixed point immediately
+end
+
+# ── §12 EvoSpecializer — Algorithms 12 + 13 + 5 + 7 (§8) ────────────────────
+
+@testset "EvoSpecializer — Algorithm 12 GatedSpecialization" begin
+    # < 10% → SPEC_VECTORIZED
+    d1 = should_specialize(1.0, 100, 100, 500.0)
+    @test d1.level == SPEC_VECTORIZED
+    @test d1.amortization_ratio < 0.10
+
+    # 10–50% → SPEC_INCREMENTAL
+    d2 = should_specialize(1.0, 100, 100, 3000.0)
+    @test d2.level == SPEC_INCREMENTAL
+
+    # ≥ 50% → SPEC_GENERIC
+    d3 = should_specialize(1.0, 100, 100, 8000.0)
+    @test d3.level == SPEC_GENERIC
+end
+
+@testset "EvoSpecializer — Algorithm 13 CanReuseFitnessCache" begin
+    g = MCoreGraph()
+    # Parent: (f (lit 1))
+    id_f  = add_sym!(g, Sym(:f))
+    id_l1 = add_lit!(g, Lit(1))
+    id_p  = add_app!(g, App(id_f, [id_l1]))
+    # Child: (f (lit 2)) — only constant changed
+    id_l2 = add_lit!(g, Lit(2))
+    id_c  = add_app!(g, App(id_f, [id_l2]))
+
+    meta  = CacheMetadata(1.0)
+    @test can_reuse_cache(g, id_c, id_p, meta)   # 1 constant change ≤ max_changes=3
+
+    # Child: (g (lit 1)) — structural change (different head)
+    id_g  = add_sym!(g, Sym(:g))
+    id_c2 = add_app!(g, App(id_g, [id_l1]))
+    @test !can_reuse_cache(g, id_c2, id_p, meta)  # structural change
+end
+
+@testset "EvoSpecializer — Algorithm 5 ApproximateFitness (Hoeffding bound)" begin
+    pb = approximate_fitness(0.7, 100)
+    lo, hi = pb.intervals[1]
+    @test lo < 0.7 < hi         # interval straddles sample fitness
+    @test pb.probabilities[1] ≈ 0.95
+    @test pb.probabilities[2] ≈ 0.05   # 5% tail reserve
+    @test pb.confidence ≈ 1.0
+
+    # More samples → narrower interval
+    pb2 = approximate_fitness(0.7, 10_000)
+    lo2, hi2 = pb2.intervals[1]
+    @test (hi2 - lo2) < (hi - lo)   # narrower
+end
+
+@testset "EvoSpecializer — Algorithm 7 AllocateEvaluations" begin
+    pop = [
+        EvolutionaryPBox(1, PBox(0.5, 0.9, 1.0), PBox(0.0,1.0,1.0), 0.8, 1),
+        EvolutionaryPBox(2, PBox(0.1, 0.3, 1.0), PBox(0.0,1.0,1.0), 0.5, 5),
+        EvolutionaryPBox(3, PBox(0.8, 0.95,1.0), PBox(0.0,1.0,1.0), 0.9, 2),
+    ]
+    alloc = allocate_evaluations(pop, 2)
+    @test length(alloc) == 2
+    # All returned ids should be valid individual ids
+    @test all(x -> x[1] in 1:3, alloc)
+    # Priorities should be non-negative
+    @test all(x -> x[2] >= 0.0, alloc)
+end
+
+# ── §13 MM2Compiler — Algorithm 14 (§9) ──────────────────────────────────────
+
+@testset "MM2Compiler — sprint_mcore_to_mm2" begin
+    g = MCoreGraph()
+    id_s = add_sym!(g, Sym(:foo))
+    id_l = add_lit!(g, Lit(42))
+    id_v = add_var!(g, Var(0))
+    id_c = add_con!(g, Con(:pair, [id_s, id_v]))
+
+    @test sprint_mcore_to_mm2(g, id_s) == "foo"
+    @test sprint_mcore_to_mm2(g, id_l) == "42"
+    @test sprint_mcore_to_mm2(g, id_v) == "\$x0"
+    @test sprint_mcore_to_mm2(g, id_c) == "(pair foo \$x0)"
+end
+
+@testset "MM2Compiler — priority encoding (§9.3)" begin
+    @test sprint_priority(MM2Priority(1)) == "(1 0)"
+    @test sprint_priority(MM2Priority(3, 2)) == "(3 2)"
+    @test MM2Priority(1) < MM2Priority(2)
+    @test MM2Priority(2, 0) < MM2Priority(2, 1)
+end
+
+@testset "MM2Compiler — compile_conditional! produces 2 atoms" begin
+    g   = MCoreGraph()
+    ctx = CompileCtx(g)
+    id_cond = add_sym!(g, Sym(:cond))
+    id_then = add_sym!(g, Sym(:then_val))
+    id_else = add_sym!(g, Sym(:else_val))
+
+    atoms = compile_conditional!(ctx, id_cond, id_then, id_else)
+    @test length(atoms) == 2
+    # First atom: pattern contains cond
+    @test occursin("cond", atoms[1].pattern)
+    # Second atom: pattern contains "not"
+    @test occursin("not", atoms[2].pattern)
+    # Second atom has higher priority
+    @test atoms[1].priority < atoms[2].priority
+end
+
+@testset "MM2Compiler — compile_program produces loadable s-exprs" begin
+    g   = MCoreGraph()
+    id_pat  = add_con!(g, Con(:edge, [add_var!(g, Var(0)), add_var!(g, Var(1))]))
+    id_tmpl = add_con!(g, Con(:node, [add_var!(g, Var(0))]))
+    id_exec = add_prim!(g, Prim(:mm2_exec, [NULL_NODE, id_pat, id_tmpl], EffectSet(UInt8(0x05))))
+
+    prog, obligs = compile_program(g, [id_exec])
+    @test !isempty(prog)
+    @test occursin("exec", prog)
+    @test !isempty(obligs)
+    # All three bisimulation obligations recorded
+    kinds = Set(o.kind for o in obligs)
+    @test :forward_sim  in kinds
+    @test :backward_sim in kinds
+    @test :fairness     in kinds
+end
+
+@testset "MM2Compiler — sequential compilation preserves order" begin
+    g   = MCoreGraph()
+    ctx = CompileCtx(g)
+    ids = [add_prim!(g, Prim(:mm2_exec, NodeID[], EffectSet(UInt8(0x05)))) for _ in 1:3]
+    atoms = compile_sequential!(ctx, ids)
+    @test length(atoms) == 3
+    # Priorities must be strictly increasing
+    @test atoms[1].priority < atoms[2].priority < atoms[3].priority
+end
+
 println("All tests passed ✓")
