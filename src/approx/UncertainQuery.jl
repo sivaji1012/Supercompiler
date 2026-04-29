@@ -33,8 +33,6 @@ struct CostWeights
     γ :: Float64   # variance
 end
 
-CostWeights(α, β, γ) = CostWeights(Float64(α), Float64(β), Float64(γ))
-
 safety_critical() :: CostWeights  = CostWeights(0.1, 0.6, 0.3)
 exploratory()     :: CostWeights  = CostWeights(0.7, 0.2, 0.1)
 balanced()        :: CostWeights  = CostWeights(1/3, 1/3, 1/3)

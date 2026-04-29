@@ -36,8 +36,11 @@ Missing depths = 0 (leaf / not expanded).
 struct CompactShape
     arities :: NTuple{3, UInt8}   # depth 1, 2, 3
 end
-CompactShape()                      = CompactShape((UInt8(0), UInt8(0), UInt8(0)))
-CompactShape(a1, a2=0, a3=0)        = CompactShape((UInt8(a1), UInt8(a2), UInt8(a3)))
+CompactShape()                                              = CompactShape((UInt8(0), UInt8(0), UInt8(0)))
+# Convenience constructor: 1-3 integers → NTuple{3,UInt8}
+function CompactShape(a1::Integer, a2::Integer=0, a3::Integer=0) :: CompactShape
+    CompactShape((UInt8(a1), UInt8(a2), UInt8(a3)))
+end
 
 """
     shape_subsumes(s1, s2) -> Bool
