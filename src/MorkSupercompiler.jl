@@ -56,6 +56,7 @@ include("rewrite/Rewrite.jl")
 include("supercompiler/Stepper.jl")
 include("supercompiler/CanonicalKeys.jl")
 include("supercompiler/BoundedSplit.jl")
+include("supercompiler/PipelineDecompose.jl")
 
 # Layer 6 — Phase 3 Specializations + Code Generation (§7–9)
 include("supercompiler/KBSaturation.jl")
@@ -154,6 +155,10 @@ export rewrite_once, step_to_value
 # BoundedSplit (Phase 2)
 export Branch, SplitResult, bounded_split
 export SPLIT_PROB_THRESHOLD, SPLIT_DEFAULT_BUDGET
+# PipelineDecompose (Rule-of-64 fix)
+export STAGE_MAX_SOURCES, SC_TMP_PREFIX
+export DecomposedProgram, decompose_exec
+export decompose_program, decompose_report, flow_vars
 # KBSaturation (Phase 3 §7)
 export Fact, is_base_fact, Rule
 export VersionedIndex, index_insert!, index_lookup, index_delta_since, bump_version!
