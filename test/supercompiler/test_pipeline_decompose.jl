@@ -6,10 +6,19 @@ using MorkSupercompiler
 @testset "flow_vars — basic variable flow" begin
     # 3 sources: (edge $x $y), (edge $y $z), (edge $z $w)
     srcs = parse_program("(edge \$x \$y) (edge \$y \$z) (edge \$z \$w)")
-    # After first 1 source, $x and $y introduced; $y needed in src 2+
+    # After first 1 source, $x and $y introduced; only $y needed in srcs 2-3
     fv = flow_vars(srcs, 1, 3)
     @test "\$y" in fv
-    @test !("\$x" in fv)   # $x not needed in srcs 2-3
+    @test !("\$x" in fv)   # $x not needed in srcs 2-3 (no final_template)
+end
+
+@testset "flow_vars — with final_template includes output vars" begin
+    srcs = parse_program("(edge \$x \$y) (edge \$y \$z) (edge \$z \$w)")
+    tpl  = only(parse_program("(dtrans \$x \$y \$z \$w)"))
+    # $x is introduced in src 1 and needed in template
+    fv = flow_vars(srcs, 1, 3; final_template=tpl)
+    @test "\$y" in fv
+    @test "\$x" in fv   # now carried because template needs it
 end
 
 @testset "flow_vars — all sources, full flow" begin

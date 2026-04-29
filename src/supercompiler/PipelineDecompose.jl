@@ -40,25 +40,30 @@ const SC_TMP_PREFIX     = "_sc_tmp"   # prefix for intermediate atom heads
 # ── Variable flow analysis ────────────────────────────────────────────────────
 
 """
-    flow_vars(sources::Vector{SNode}, from_idx::Int, to_idx::Int) -> Vector{String}
+    flow_vars(sources, from_idx, to_idx; final_template=nothing) -> Vector{String}
 
-Variables introduced in sources `1:from_idx` AND used in sources `from_idx+1:to_idx`.
-These are the variables that must be carried through the intermediate atom.
+Variables introduced in `sources[1:from_idx]` AND needed anywhere downstream
+(sources `from_idx+1:to_idx` OR in `final_template`).
+
+The `final_template` argument is critical: without it, variables only needed
+in the output (not in any remaining source) would be silently dropped.
 """
-function flow_vars(sources::AbstractVector{<:SNode}, from_idx::Int, to_idx::Int) :: Vector{String}
-    # Variables introduced in the first `from_idx` sources
+function flow_vars(sources::AbstractVector{<:SNode}, from_idx::Int, to_idx::Int;
+                   final_template::Union{SNode,Nothing} = nothing) :: Vector{String}
     introduced = Set{String}()
     for src in sources[1:from_idx]
         union!(introduced, collect_var_names(src))
     end
 
-    # Variables used in sources `from_idx+1:to_idx`
     needed_later = Set{String}()
     for src in sources[from_idx+1:to_idx]
         union!(needed_later, collect_var_names(src))
     end
+    # Also carry vars needed by the final output template
+    if final_template !== nothing
+        union!(needed_later, collect_var_names(final_template))
+    end
 
-    # Flow vars: introduced AND needed later (sorted for determinism)
     sort!(collect(intersect(introduced, needed_later)))
 end
 
@@ -139,8 +144,8 @@ function _build_chain!(stages::Vector{SNode},
     first_srcs = sources[1:split_at]
     rest_srcs  = sources[split_at+1:end]
 
-    # Flow variables: introduced in first_srcs AND needed in rest_srcs
-    all_vars = flow_vars(sources, split_at, n)
+    # Flow variables: introduced in first_srcs AND needed in rest_srcs OR final template
+    all_vars = flow_vars(sources, split_at, n; final_template=final_template)
 
     # Intermediate atom: _sc_tmp0, _sc_tmp1, ...
     tmp_id   = counter[]
