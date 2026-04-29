@@ -4,14 +4,15 @@ A formally-grounded supercompiler for MeTTa+MM2, implemented in Julia.
 
 Implements the full specification from three design documents by Ben Goertzel (Oct–Apr 2025/2026):
 
-| Document | Coverage |
-|----------|----------|
-| *A MORK-Native Supercompiler for MeTTa+MM2* (Oct 2025) | ✅ Complete — all 14 algorithms, all data structures |
-| *Approximate Supercompilation for MeTTa+MM2* (Oct 2025) | 🔄 In progress — p-box stubs present, algebra next |
-| *A Multi-Geometry Hyperon Methods Framework* (Apr 2026) | 📋 Planned |
+| Document | Algorithms | Status |
+|----------|-----------|--------|
+| *A MORK-Native Supercompiler for MeTTa+MM2* (Oct 2025) | 14 | ✅ Complete — audited `docs/AUDIT_DOC1.md` |
+| *Approximate Supercompilation for MeTTa+MM2* (Oct 2025) | 7 | ✅ Complete — audited `docs/AUDIT_DOC2.md` |
+| *A Multi-Geometry Hyperon Methods Framework* (Apr 2026) | 5 | ✅ Complete — audited `docs/AUDIT_DOC3.md` |
 
 **Repo**: [sivaji1012/Supercompiler](https://github.com/sivaji1012/Supercompiler)  
-**Depends on**: [sivaji1012/MORK](https://github.com/sivaji1012/MORK) + [sivaji1012/PathMap](https://github.com/sivaji1012/PathMap)
+**Depends on**: [sivaji1012/MORK](https://github.com/sivaji1012/MORK) + [sivaji1012/PathMap](https://github.com/sivaji1012/PathMap)  
+**Tests**: 580+ across 22 test files, all passing
 
 ---
 
@@ -20,23 +21,38 @@ Implements the full specification from three design documents by Ben Goertzel (O
 ```julia
 using MorkSupercompiler, MORK
 
+# Load facts into a MORK Space
 s = new_space()
 space_add_all_sexpr!(s, "(edge 0 1) (edge 1 2) (edge 2 3)")
 
+# Plan + execute: stats → join-order → execute
 result = sc_run!(s, raw"(exec 0 (, (edge $x $y) (edge $y $z)) (, (path $x $z)))")
 println(timing_report(result))
+
+# Explain the join plan chosen
 println(sc_explain(s, raw"(exec 0 (, (edge $x $y) (edge $y $z)) (, (path $x $z)))"))
+
+# Approximate supercompilation with error budget
+result2 = run_approx_pipeline(s, raw"(exec 0 (, (edge $x $y) (edge $y $z)) (, (path $x $z)))";
+                               error_tolerance=0.05)
+
+# MG Framework: define a factor rule and register it
+r = define_factor_rule(
+    name        = :TransitivityRule,
+    premises    = [:Ancestor_x_y, :Ancestor_y_z],
+    conclusion  = [:Ancestor_x_z],
+    truth_family= :STV)
 ```
 
-### Development REPL (warm, Revise-enabled)
+### Development REPL (warm — no cold-start, Revise-enabled)
 
 ```bash
 julia --project=. -i tools/sc_repl.jl
 ```
 ```julia
-t()                   # run all tests (no restart)
+t()                   # run all 580+ tests without restarting
 plan(prog)            # static source reordering
-report(facts, prog)   # join-plan explanation
+report(facts, prog)   # join-plan explanation with cardinalities
 run(facts, prog, n)   # plan + execute n steps
 ```
 
@@ -44,140 +60,216 @@ run(facts, prog, n)   # plan + execute n steps
 
 ## Architecture
 
-Six layers mirroring the MM2 Supercompiler spec §10 roadmap:
+Nine layers covering all three specification documents:
 
 ```
 src/
-  frontend/           S-expression parser (SExpr.jl)
-  core/               M-Core IR (MCore.jl) + Effect algebra (Effects.jl)       §3–4
-  planner/            Selectivity, Statistics, QueryPlanner                     §5
-  rewrite/            Source reorderer (Rewrite.jl)
-  supercompiler/      Stepper, CanonicalKeys, BoundedSplit,                     §6–8
-                      KBSaturation, EvoSpecializer
-  codegen/            MM2Compiler (Algorithm 14 bisimulation)                   §9
-  integration/        SCPipeline, Profiler, Explainer, AdaptivePlanner          §10.4
-  approx/             (in progress) P-box algebra, uncertain inference          approx spec
+  frontend/      SExpr.jl              — s-expression parser
+  core/          MCore.jl              — 11 M-Core IR node types + MCoreGraph
+                 Effects.jl            — Effect algebra (Algorithm 1)
+  planner/       Selectivity.jl        — static + O(1) dynamic cardinality
+                 Statistics.jl         — MORKStatistics (all 6 spec fields)
+                 QueryPlanner.jl       — Algorithm 6 EffectAwarePlanning
+  rewrite/       Rewrite.jl            — source reorderer (join-order)
+  supercompiler/ Stepper.jl            — Algorithm 7+8 (RewriteOnce, CallPrimitive)
+                 CanonicalKeys.jl      — Algorithm 10 (KeySubsumption + FoldTable)
+                 BoundedSplit.jl       — Algorithm 9 (Rule-of-64 fix)
+                 KBSaturation.jl       — Algorithm 11 (IncrementalSaturation)
+                 EvoSpecializer.jl     — Algorithms 12+13+5+7
+  codegen/       MM2Compiler.jl        — Algorithm 14 (BisimulationProof + MM2)
+  integration/   SCPipeline.jl         — sc_run! end-to-end pipeline
+                 Profiler.jl           — baseline vs planned speedup
+                 Explainer.jl          — sc_explain + sc_dot + sc_diff
+                 AdaptivePlanner.jl    — Algorithm 5 drift-based replanning
+  approx/        PBoxAlgebra.jl        — Doc 2 §2: AddPBox + Fréchet + theorems
+                 UncertainQuery.jl     — Doc 2 §3: cost model + ApproximateSplit
+                 UncertainInference.jl — Doc 2 §4: AND/OR + MatchWithUncertainty + ApplyRule
+                 ApproxMOSES.jl        — Doc 2 §5: TournamentWithPBox + convergence
+                 ApproxPipeline.jl     — Doc 2 §6: ApproxIndex + 4-phase pipeline
+  mgfw/          SemanticObjects.jl    — Doc 3 §6.1-6.2: Pres(G,A) + TyLA coercions
+                 GeometryTemplate.jl   — Doc 3 §6.3+§13: 13-field template + contracts
+                 SchemaRegistry.jl     — Doc 3 §8+§11: registry + DSL + Algorithm 4
+                 FactorGeometry.jl     — Doc 3 §10.1: Algorithms 1+2 + STV
+                 TrieDAGGeometry.jl    — Doc 3 §10.2-10.3: Algorithm 3 + trie mining
+                 MGCompiler.jl         — Doc 3 §9+§12: Algorithm 5 + late commitment
 ```
 
 ---
 
-## Implemented Algorithms — Doc 1 (MM2 Supercompiler Spec)
+## Implemented Algorithms
 
-| # | Algorithm | Section | File | ✓ |
-|---|-----------|---------|------|---|
-| 1 | EffectCommutes | §4.2 | `core/Effects.jl` | ✅ |
-| 2 | EstimatePatternCardinality | §5.1.2 | `planner/Statistics.jl` | ✅ |
-| 3 | PrefixSampling | §5.1.3 | `planner/Statistics.jl` | ✅ |
-| 4 | UpdateIncrementalStats | §5.2.1 | `planner/Statistics.jl` | ✅ |
-| 5 | ShouldReplan | §5.2.2 | `integration/AdaptivePlanner.jl` | ✅ |
-| 6 | EffectAwarePlanning | §5.3.1 | `planner/QueryPlanner.jl` | ✅ |
-| 7 | RewriteOnce | §6.1 | `supercompiler/Stepper.jl` | ✅ |
-| 8 | CallPrimitive | §6.1 | `supercompiler/Stepper.jl` | ✅ |
-| 9 | BoundedSplit | §6.2 | `supercompiler/BoundedSplit.jl` | ✅ |
-| 10 | KeySubsumption | §6.3.2 | `supercompiler/CanonicalKeys.jl` | ✅ |
-| 11 | IncrementalSaturation | §7.1 | `supercompiler/KBSaturation.jl` | ✅ |
-| 12 | GatedEvolutionarySpecialization | §8.1 | `supercompiler/EvoSpecializer.jl` | ✅ |
-| 13 | CanReuseFitnessCache | §8.2 | `supercompiler/EvoSpecializer.jl` | ✅ |
-| 14 | BisimulationProof | §9.2 | `codegen/MM2Compiler.jl` | ✅ |
+### Doc 1 — MM2 Supercompiler Spec (14 algorithms)
 
-## Data Structures — Doc 1 (Spec Appendix B)
+| # | Algorithm | File |
+|---|-----------|------|
+| 1 | EffectCommutes | `core/Effects.jl` |
+| 2 | EstimatePatternCardinality | `planner/Statistics.jl` |
+| 3 | PrefixSampling | `planner/Statistics.jl` |
+| 4 | UpdateIncrementalStats | `planner/Statistics.jl` |
+| 5 | ShouldReplan | `integration/AdaptivePlanner.jl` |
+| 6 | EffectAwarePlanning | `planner/QueryPlanner.jl` |
+| 7 | RewriteOnce | `supercompiler/Stepper.jl` |
+| 8 | CallPrimitive | `supercompiler/Stepper.jl` |
+| 9 | BoundedSplit ← *Rule-of-64 fix* | `supercompiler/BoundedSplit.jl` |
+| 10 | KeySubsumption | `supercompiler/CanonicalKeys.jl` |
+| 11 | IncrementalSaturation | `supercompiler/KBSaturation.jl` |
+| 12 | GatedEvolutionarySpecialization | `supercompiler/EvoSpecializer.jl` |
+| 13 | CanReuseFitnessCache | `supercompiler/EvoSpecializer.jl` |
+| 14 | BisimulationProof | `codegen/MM2Compiler.jl` |
 
-| Structure | File | Spec Fields |
-|-----------|------|-------------|
-| 11 M-Core node types | `core/MCore.jl` | Sym, Var, Lit, Con, App, Abs, LetNode, MatchNode, Choice, Prim, MCoreRef |
-| `Effect` algebra | `core/Effects.jl` | Read, Write, Append, Create, Delete, Observe, Pure |
-| `MORKStatistics` | `planner/Statistics.jl` | node_type_counts, pattern_shape_histogram, predicate_fanout, argument_selectivity, pattern_match_cache, correlation_matrix |
-| `IncrementalStats` | `planner/Statistics.jl` | base, delta, growth_rate, selectivity_drift, last_replan_time |
-| `EffectStats` | `planner/Statistics.jl` | pattern_effect_probability, effect_correlation, effect_cost, effect_frequency |
-| `CanonicalPathSig` | `supercompiler/CanonicalKeys.jl` | head, shape, tags, depth, kb_sig, effect_sig |
-| `VersionedIndex` | `supercompiler/KBSaturation.jl` | version, index, delta_since, stats, last_replan_ver |
-| `UncertainNode` + `PBox` | `core/MCore.jl` | From approx spec §2.4 |
+### Doc 2 — Approximate Supercompilation Spec (7 algorithms)
+
+| # | Algorithm | File |
+|---|-----------|------|
+| 1 | AddPBox (independent + Fréchet-Hoeffding) | `approx/PBoxAlgebra.jl` |
+| 2 | EstimateCardinalityPBox (Hoeffding-bounded) | `approx/UncertainQuery.jl` |
+| 3a | ApproximateSplit (error-tolerance-gated) | `approx/UncertainQuery.jl` |
+| 3b | MatchWithUncertainty (structural similarity) | `approx/UncertainInference.jl` |
+| 4 | ApplyRule / UncertainModusPonens | `approx/UncertainInference.jl` |
+| 5 | ApproximateFitness (Hoeffding bound + 5% tail) | `supercompiler/EvoSpecializer.jl` |
+| 6 | TournamentWithPBox (Monte Carlo, 100 trials) | `approx/ApproxMOSES.jl` |
+| 7 | AllocateEvaluations (value of information) | `supercompiler/EvoSpecializer.jl` |
+
+Also: Theorem A.2 (error composition), Lemma A.4 (Fréchet width), Lemma A.5 (Hoeffding).
+
+### Doc 3 — Multi-Geometry Framework Spec (5 algorithms)
+
+| # | Algorithm | File |
+|---|-----------|------|
+| 1 | Exact factor-geometry specialization (8 steps) | `mgfw/FactorGeometry.jl` |
+| 2 | Approximate factor specialization (7 steps) | `mgfw/FactorGeometry.jl` |
+| 3 | Canonical DAG evolutionary loop (8 steps) | `mgfw/TrieDAGGeometry.jl` |
+| 4 | Human/LLM authoring workflow (8 steps) | `mgfw/SchemaRegistry.jl` |
+| 5 | Geometry-aware compilation pipeline (9 steps) | `mgfw/MGCompiler.jl` |
+
+---
+
+## Key Data Structures
+
+| Structure | Spec | File |
+|-----------|------|------|
+| 11 M-Core node types + `MCoreGraph` | Doc 1 §3 | `core/MCore.jl` |
+| `MORKStatistics` (6 fields) | Doc 1 §5.1.1 | `planner/Statistics.jl` |
+| `CanonicalPathSig` + `FoldTable` | Doc 1 §6.3 | `supercompiler/CanonicalKeys.jl` |
+| `PBox` (4 fields incl. `correlation_sig`) | Doc 2 §2.2 | `core/MCore.jl` |
+| `UncertainFact` + `ProofTree` | Doc 2 §4.1 | `approx/UncertainInference.jl` |
+| `ApproximatePathSig` (EXACT/BOUNDED/STATISTICAL) | Doc 2 §6.4 | `approx/ApproxPipeline.jl` |
+| `GeometryTemplate` (14 fields incl. noether_charge) | Doc 3 §6.3 | `mgfw/GeometryTemplate.jl` |
+| `LocalConcurrencyContract` (8 fields) | Doc 3 §13.1 | `mgfw/GeometryTemplate.jl` |
+| `DistributedExecContract` (10 fields) | Doc 3 §13.2 | `mgfw/GeometryTemplate.jl` |
+| `SchemaRegistry` + 5 DSL forms | Doc 3 §8 | `mgfw/SchemaRegistry.jl` |
 
 ---
 
 ## Tests
 
-253 tests, organized by layer:
+580+ tests across 22 files organized by layer:
 
 ```
 test/
-  runtests.jl                         master runner (includes all)
-  frontend/    test_sexpr.jl
-  core/        test_mcore.jl  test_effects.jl
-  planner/     test_statistics.jl  test_selectivity.jl  test_query_planner.jl
-  rewrite/     test_rewrite.jl
-  supercompiler/
-               test_stepper.jl  test_canonical_keys.jl  test_bounded_split.jl
-               test_kb_saturation.jl  test_evo_specializer.jl
-  codegen/     test_mm2_compiler.jl
-  integration/ test_pipeline.jl  test_profiler.jl  test_explainer.jl
-               test_adaptive_planner.jl
+  runtests.jl                 — master runner
+  frontend/                   test_sexpr.jl
+  core/                       test_mcore.jl  test_effects.jl
+  planner/                    test_statistics.jl  test_selectivity.jl  test_query_planner.jl
+  rewrite/                    test_rewrite.jl
+  supercompiler/              test_stepper.jl  test_canonical_keys.jl  test_bounded_split.jl
+                              test_kb_saturation.jl  test_evo_specializer.jl
+  codegen/                    test_mm2_compiler.jl
+  integration/                test_pipeline.jl  test_profiler.jl  test_explainer.jl
+                              test_adaptive_planner.jl
+  approx/                     test_pbox_algebra.jl  test_uncertain_query.jl
+                              test_uncertain_inference.jl  test_approx_moses.jl
+                              test_approx_pipeline.jl
+  mgfw/                       test_mgfw.jl
 ```
 
 ---
 
 ## Public API
 
-### Pipeline
+### Pipeline (Doc 1 integration layer)
 
 ```julia
-sc_run!(s, program; opts)        # stats → plan → execute, returns SCResult
-sc_run(facts, program; steps)    # fresh space + run
-timing_report(result)            # per-phase ms breakdown
-```
-
-### Explanation
-
-```julia
-sc_explain(s, program)           # join order + cardinalities + variable flow
-sc_dot(program)                  # Graphviz DOT source
-sc_diff(original, planned)       # what changed after planning
-```
-
-### Profiling
-
-```julia
-sc_profile(facts, program; steps, trials)  # baseline vs planned timing
-speedup_report(profile)                    # formatted speedup table
-```
-
-### Adaptive Replanning
-
-```julia
+sc_run!(s, program; opts)           # stats → plan → execute → SCResult
+sc_run(facts, program; steps)       # fresh space + run
+sc_explain(s, program)              # join order + cardinalities + variable flow
+sc_dot(program)                     # Graphviz DOT source
+sc_profile(facts, program; steps)   # baseline vs planned speedup
+speedup_report(profile)             # formatted table
 ap = AdaptivePlan(s, program)
-sc_run_adaptive!(s, ap; steps)   # auto-replan when cardinalities drift
+sc_run_adaptive!(s, ap; steps)      # auto-replan on cardinality drift
 ```
 
 ### Query Planner
 
 ```julia
-collect_stats(s; sample_frac)    # build MORKStatistics (Algorithms 2+3)
-sc_plan_static(program)          # reorder sources, no Space needed
-sc_plan_program(s, program)      # reorder using live btm prefix counts
-plan_query(sources, stats)       # Algorithm 6: (planned_sources, barriers)
+collect_stats(s; sample_frac)       # MORKStatistics (Algorithms 2+3)
+sc_plan_static(program)             # static source reordering
+sc_plan_program(s, program)         # dynamic (uses btm prefix counts)
+plan_query(sources, stats)          # Algorithm 6: sources + EffectBarriers
 ```
 
 ### Supercompiler Core
 
 ```julia
-rewrite_once(g, id, env, deps, registry)   # Algorithm 7 RewriteOnce
-bounded_split(g, id, env, stats; budget)   # Algorithm 9 BoundedSplit
-canonical_key(g, id, depth)                # CanonicalPathSig
-subsumes(key1, key2)                       # Algorithm 10 KeySubsumption
-saturate!(kb; max_rounds)                  # Algorithm 11 IncrementalSaturation
-compile_program(g, root_ids)               # Algorithm 14 → MM2 exec s-expressions
+rewrite_once(g, id, env, deps, reg) # Algorithm 7 RewriteOnce
+bounded_split(g, id, env, stats)    # Algorithm 9 BoundedSplit (Rule-of-64 fix)
+canonical_key(g, id, depth)         # CanonicalPathSig for termination
+subsumes(key1, key2)                # Algorithm 10 KeySubsumption
+saturate!(kb; max_rounds)           # Algorithm 11 IncrementalSaturation
+compile_program(g, root_ids)        # Algorithm 14 → MM2 exec s-expressions
 ```
+
+### Approximate Supercompilation (Doc 2)
+
+```julia
+add_pbox(X, Y)                      # Algorithm 1: independent or Fréchet
+match_with_uncertainty(pat, fact, ε)# Algorithm 3b: structural similarity
+apply_rule(premise, rule_str, depth)# Algorithm 4: UncertainModusPonens
+tournament_with_pbox(candidates, n) # Algorithm 6: MC tournament selection
+run_approx_pipeline(s, program; ε)  # 4-phase approximate compilation
+```
+
+### MG Framework (Doc 3)
+
+```julia
+define_factor_rule(; name, ...)     # DSL → canonical GeometryTemplate
+define_trie_miner(; name, ...)      # DSL → trie geometry template
+mg_compile(region, registry)        # Algorithm 5: 9-step compilation
+mg_run!(s, region)                  # compile + execute
+specialize_exact(query, graph)      # Algorithm 1: exact factor specialization
+specialize_approximate(query, graph, ε) # Algorithm 2: approximate with witness
+evolve_demes!(demes, fitness_fn)    # Algorithm 3: canonical DAG evolution
+run_trie_miner(template, data)      # 3-stage trie mining (§15.6)
+```
+
+---
+
+## Local Setup
+
+```bash
+cd packages/MorkSupercompiler
+julia --project=. -e '
+  import Pkg
+  Pkg.develop([Pkg.PackageSpec(path="../PathMap"),
+               Pkg.PackageSpec(path="../MORK")])
+'
+```
+
+---
+
+## Documentation
+
+| Document | Contents |
+|----------|----------|
+| `docs/ARCHITECTURE.md` | Layer diagram, data flow, type hierarchy, effect commutativity table |
+| `docs/AUDIT_DOC1.md` | Gap analysis vs MM2 Supercompiler Spec — 5 gaps found+fixed |
+| `docs/AUDIT_DOC2.md` | Gap analysis vs Approximate Supercompilation Spec — 0 blocking gaps |
+| `docs/AUDIT_DOC3.md` | Gap analysis vs MG Framework Spec — 7 gaps found+fixed |
 
 ---
 
 ## What's Next
 
-**Doc 2 — Approximate Supercompilation** (`src/approx/`):
-
-| File | Algorithms | Spec |
-|------|-----------|------|
-| `PBoxAlgebra.jl` | AddPBox, Fréchet bounds | §2.3 Alg 1 |
-| `UncertainQuery.jl` | EstimateCardinalityPBox, MatchWithUncertainty | §3 Alg 2+3 |
-| `UncertainInference.jl` | UncertainModusPonens (AND/OR with correlation) | §4 Alg 4 |
-| `ApproxMOSES.jl` | TournamentWithPBox | §5 Alg 6 |
-| `ApproxPipeline.jl` | 4-phase approximate pipeline, ApproxIndex, ApproximatePathSig | §6 |
+1. **Benchmark validation** — run `sc_profile` on canonical Rule-of-64 cases (odd_even_sort, counter_machine, transitive_detect) and measure actual speedup from join-order optimization
+2. **MORK integration** — wire `BoundedSplit` + nested-loop join into `space_metta_calculus!` to replace `ProductZipper` for multi-source patterns
