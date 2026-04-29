@@ -60,7 +60,12 @@ else
         isempty(strip(line)) && continue
         try
             result = eval(Meta.parse(line))
-            result !== nothing && println(result)
+            # Only auto-print scalars and strings — suppress Space/large structs
+            # that would flood stdout with raw binary trie data.
+            if result !== nothing && (result isa Number || result isa AbstractString ||
+                                      result isa Symbol  || result isa Bool)
+                println(result)
+            end
         catch e
             println("ERROR: ", e)
             failed = true
