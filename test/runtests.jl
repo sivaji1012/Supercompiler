@@ -740,4 +740,147 @@ end
     @test atoms[1].priority < atoms[2].priority < atoms[3].priority
 end
 
+
+# ── §14 SCPipeline — end-to-end integration (§10.4) ──────────────────────────
+
+@testset "SCPipeline — sc_run! stages (plan=true)" begin
+    facts = raw"""
+    (edge 0 1) (edge 1 2) (edge 2 3)
+    """
+    prog  = raw"""
+    (exec 0 (, (edge $x $y) (edge $y $z)) (, (trans $x $z)))
+    """
+    s = new_space()
+    space_add_all_sexpr!(s, facts)
+    r = sc_run!(s, prog; opts=SCOptions(max_steps=1))
+    @test r isa SCResult
+    @test haskey(r.timings, :execute)
+    @test haskey(r.timings, :plan)
+    @test !isempty(r.program_planned)
+end
+
+@testset "SCPipeline — sc_run convenience wrapper" begin
+    facts = "(a 1) (a 2) (a 3)"
+    prog  = raw"(exec 0 (, (a $x)) (, (b $x)))"
+    s, r  = sc_run(facts, prog; steps=1)
+    @test s isa Space
+    @test r isa SCResult
+    @test space_val_count(s) > 3   # at least some new atoms
+end
+
+@testset "SCPipeline — timing_report returns non-empty string" begin
+    _, r = sc_run("(foo 1)", raw"(exec 0 (, (foo $x)) (, (bar $x)))"; steps=1)
+    rep  = timing_report(r)
+    @test !isempty(rep)
+    @test occursin("execute", rep)
+end
+
+# ── §15 Profiler ──────────────────────────────────────────────────────────────
+
+@testset "Profiler — sc_profile returns SCProfile" begin
+    facts = "(edge 0 1) (edge 1 2)"
+    prog  = raw"(exec 0 (, (edge $x $y) (edge $y $z)) (, (path $x $z)))"
+    p = sc_profile(facts, prog; steps=2, trials=1)
+    @test p isa SCProfile
+    @test p.atom_count_before >= 2
+    @test haskey(p.baseline_times, PHASE_EXECUTE)
+    @test haskey(p.planned_times,  PHASE_EXECUTE)
+end
+
+@testset "Profiler — speedup_report is non-empty" begin
+    facts = "(edge 0 1)"
+    prog  = raw"(exec 0 (, (edge $x $y)) (, (reach $x)))"
+    p   = sc_profile(facts, prog; steps=1, trials=1)
+    rep = speedup_report(p)
+    @test !isempty(rep)
+    @test occursin("Speedup", rep) || occursin("speedup", rep)
+end
+
+# ── §16 Explainer ─────────────────────────────────────────────────────────────
+
+@testset "Explainer — sc_explain on multi-source pattern" begin
+    s = new_space()
+    space_add_all_sexpr!(s, "(parity 0 even) (parity 1 odd) (succ 0 1) (succ 1 2)")
+    prog = raw"""((phase $p) (, (parity $i $p) (succ $i $si) (A $i $e)) (O res))"""
+    exp  = sc_explain(s, prog)
+    @test !isempty(exp)
+    @test occursin("Sources", exp)
+    @test occursin("Planned order", exp)
+end
+
+@testset "Explainer — sc_explain on single-source (no reorder)" begin
+    s = new_space()
+    space_add_all_sexpr!(s, "(foo 1)")
+    prog = raw"(exec 0 (, (foo $x)) (, (bar $x)))"
+    exp  = sc_explain(s, prog)
+    @test occursin("no multi-source", exp)
+end
+
+@testset "Explainer — sc_dot produces valid DOT header" begin
+    prog = raw"""((phase $p) (, (parity $i $p) (succ $i $si)) (O res))"""
+    dot  = sc_dot(prog)
+    @test startswith(strip(dot), "digraph")
+    @test occursin("rankdir", dot)
+end
+
+@testset "Explainer — sc_diff detects reordering" begin
+    prog = raw"""((phase $p) (, (lt $x $y) (parity $i $p)) (O res))"""
+    stats = MORKStatistics(
+        Dict("parity" => 5, "lt" => 50),
+        Dict{String,Int}(), Dict{Tuple{String,Int},Tuple{Float64,Float64}}(), 55, 55)
+    planned = plan_program(prog, stats)
+    diff = sc_diff(prog, planned)
+    @test !isempty(diff)
+end
+
+# ── §17 AdaptivePlanner ───────────────────────────────────────────────────────
+
+@testset "AdaptivePlanner — build initial plan" begin
+    s = new_space()
+    space_add_all_sexpr!(s, "(edge 0 1) (edge 1 2)")
+    prog = raw"(exec 0 (, (edge $x $y) (edge $y $z)) (, (path $x $z)))"
+    ap   = AdaptivePlan(s, prog)
+    @test ap.plan_version == 1
+    @test ap.calls_since_plan == 0
+    @test !isempty(ap.program_planned)
+end
+
+@testset "AdaptivePlanner — should_replan triggers on age" begin
+    s  = new_space()
+    space_add_all_sexpr!(s, "(foo 1)")
+    prog = raw"(exec 0 (, (foo $x)) (, (bar $x)))"
+    ap   = AdaptivePlan(s, prog)
+    ap.calls_since_plan = MAX_PLAN_AGE   # force age threshold
+    @test should_replan(ap, s)
+end
+
+@testset "AdaptivePlanner — should_replan false when fresh" begin
+    s  = new_space()
+    space_add_all_sexpr!(s, "(foo 1)")
+    prog = raw"(exec 0 (, (foo $x)) (, (bar $x)))"
+    ap   = AdaptivePlan(s, prog)
+    @test !should_replan(ap, s)   # fresh plan → no replan needed
+end
+
+@testset "AdaptivePlanner — replan! increments version" begin
+    s  = new_space()
+    space_add_all_sexpr!(s, "(foo 1) (foo 2) (foo 3)")
+    prog = raw"(exec 0 (, (foo $x)) (, (bar $x)))"
+    ap   = AdaptivePlan(s, prog)
+    v0   = ap.plan_version
+    replan!(ap, s)
+    @test ap.plan_version == v0 + 1
+    @test ap.calls_since_plan == 0
+end
+
+@testset "AdaptivePlanner — sc_run_adaptive! executes" begin
+    s  = new_space()
+    space_add_all_sexpr!(s, "(foo 1)")
+    prog = raw"(exec 0 (, (foo $x)) (, (bar $x)))"
+    ap   = AdaptivePlan(s, prog)
+    res  = sc_run_adaptive!(s, ap; steps=1)
+    @test res.plan_version >= 1
+    @test space_val_count(s) > 1   # some new atoms added
+end
+
 println("All tests passed ✓")

@@ -62,6 +62,12 @@ include("supercompiler/KBSaturation.jl")
 include("supercompiler/EvoSpecializer.jl")
 include("codegen/MM2Compiler.jl")
 
+# Layer 7 — Integration + Production Hardening (§10.4)
+include("integration/SCPipeline.jl")
+include("integration/Profiler.jl")
+include("integration/Explainer.jl")
+include("integration/AdaptivePlanner.jl")
+
 # ── High-level public API ─────────────────────────────────────────────────────
 
 """
@@ -182,6 +188,12 @@ export MM2Priority, MM2ExecAtom, sprint_exec, sprint_priority
 export CompileCtx, BiSimObligation
 export compile_sequential!, compile_conditional!, compile_node!, compile_program
 export sprint_mcore_to_mm2
+# Integration layer (Phase 4)
+export SCOptions, SC_DEFAULTS, SCResult, sc_run!, sc_run, timing_report
+export ProfilePhase, SCProfile, sc_profile, speedup_report
+export sc_explain, sc_dot, sc_diff
+export AdaptivePlan, should_replan, replan!, sc_run_adaptive!, update_stats!
+export MAX_PLAN_AGE, REPLAN_DRIFT
 # CanonicalKeys (Phase 2)
 export CompactShape, shape_subsumes, extract_shape
 export FixedArgMask, CanonicalKBSig, CanonicalEffectSig, CanonicalPathSig

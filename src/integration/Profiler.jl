@@ -1,0 +1,213 @@
+"""
+Profiler — per-phase timing and baseline-vs-planned speedup measurement.
+
+Implements §10.4 performance profiling from the MM2 Supercompiler spec.
+
+Usage:
+  profile = sc_profile(facts, program; steps=5)
+  println(speedup_report(profile))
+
+The profiler runs both the baseline (no planning) and the planned version
+on identical fresh spaces, measuring wall-clock time for each pipeline stage.
+Reports speedup = baseline_exec_time / planned_exec_time.
+"""
+
+using MORK: Space, new_space, space_add_all_sexpr!, space_metta_calculus!
+
+# ── Phase enumeration ─────────────────────────────────────────────────────────
+
+"""Pipeline phases tracked by the profiler."""
+@enum ProfilePhase begin
+    PHASE_STATS
+    PHASE_PLAN
+    PHASE_LOAD
+    PHASE_EXECUTE
+    PHASE_TOTAL
+end
+
+# ── SCProfile ─────────────────────────────────────────────────────────────────
+
+"""
+    SCProfile
+
+Comparison between baseline (no planning) and planned execution.
+
+  baseline_times  — phase → seconds for baseline run
+  planned_times   — phase → seconds for planned run
+  baseline_steps  — steps executed without planning
+  planned_steps   — steps executed with planning
+  atom_count_before — space size before loading program
+  atom_count_after  — space size after execution
+  n_sources_reordered — number of source lists that were reordered
+"""
+struct SCProfile
+    baseline_times      :: Dict{ProfilePhase, Float64}
+    planned_times       :: Dict{ProfilePhase, Float64}
+    baseline_steps      :: Int
+    planned_steps       :: Int
+    atom_count_before   :: Int
+    atom_count_after    :: Int
+    n_sources_reordered :: Int
+end
+
+# ── sc_profile ────────────────────────────────────────────────────────────────
+
+"""
+    sc_profile(facts, program; steps, trials, sample_frac) -> SCProfile
+
+Measure baseline vs. planned execution on `program` loaded into a space
+pre-populated with `facts`.  Runs `trials` repetitions and returns the
+median timing.
+
+`steps` limits `space_metta_calculus!` so the measurement completes quickly.
+"""
+function sc_profile(facts   :: AbstractString,
+                    program :: AbstractString;
+                    steps   :: Int     = 10,
+                    trials  :: Int     = 3,
+                    sample_frac :: Float64 = 1.0) :: SCProfile
+
+    # Measure atom count before loading program
+    s_ref = new_space()
+    space_add_all_sexpr!(s_ref, facts)
+    n_before = space_val_count(s_ref)
+
+    # Count sources reordered (static check, no space needed)
+    n_reordered = _count_reordered_sources(program)
+
+    # Baseline: load unmodified program, time execution
+    baseline_times = _run_trial(facts, program, steps, trials, false, sample_frac)
+
+    # Planned: reorder sources, time planning + execution
+    planned_times = _run_trial(facts, program, steps, trials, true, sample_frac)
+
+    # Atom count after one planned run
+    s2 = new_space()
+    space_add_all_sexpr!(s2, facts)
+    planned_prog = sc_plan_static(program)
+    space_add_all_sexpr!(s2, planned_prog)
+    space_metta_calculus!(s2, steps)
+    n_after = space_val_count(s2)
+
+    SCProfile(
+        baseline_times,
+        planned_times,
+        _extract_steps(baseline_times),
+        _extract_steps(planned_times),
+        n_before,
+        n_after,
+        n_reordered)
+end
+
+function _run_trial(facts, program, steps, trials, do_plan, sample_frac) :: Dict{ProfilePhase, Float64}
+    all_times = [Dict{ProfilePhase, Float64}() for _ in 1:trials]
+
+    for i in 1:trials
+        t = Dict{ProfilePhase, Float64}()
+
+        # Stats phase (plan only)
+        stats_time = 0.0
+        if do_plan
+            s_tmp = new_space()
+            space_add_all_sexpr!(s_tmp, facts)
+            stats_time = @elapsed collect_stats(s_tmp; sample_frac=sample_frac)
+        end
+        t[PHASE_STATS] = stats_time
+
+        # Plan phase
+        plan_time = 0.0
+        prog_to_use = program
+        if do_plan
+            plan_time = @elapsed (prog_to_use = sc_plan_static(program))
+        end
+        t[PHASE_PLAN] = plan_time
+
+        # Build space + load facts
+        s = new_space()
+        space_add_all_sexpr!(s, facts)
+
+        # Load program
+        t[PHASE_LOAD] = @elapsed space_add_all_sexpr!(s, prog_to_use)
+
+        # Execute
+        t[PHASE_EXECUTE] = @elapsed space_metta_calculus!(s, steps)
+
+        total = t[PHASE_STATS] + t[PHASE_PLAN] + t[PHASE_LOAD] + t[PHASE_EXECUTE]
+        t[PHASE_TOTAL] = total
+        all_times[i] = t
+    end
+
+    # Return median across trials
+    _median_times(all_times)
+end
+
+function _median_times(all :: Vector{Dict{ProfilePhase, Float64}}) :: Dict{ProfilePhase, Float64}
+    isempty(all) && return Dict{ProfilePhase, Float64}()
+    phases = keys(all[1])
+    Dict(ph => _median([t[ph] for t in all]) for ph in phases)
+end
+
+_median(v::Vector{Float64}) = sort(v)[div(length(v), 2) + 1]
+_extract_steps(::Dict) = 0   # steps tracking via sc_run!; stub here
+
+function _count_reordered_sources(program::AbstractString) :: Int
+    nodes = parse_program(program)
+    count = 0
+    for node in nodes
+        node isa SList || continue
+        items = (node::SList).items
+        length(items) < 3 || !is_conjunction(items[2]) && continue
+        sources = (items[2]::SList).items[2:end]
+        length(sources) <= 1 && continue
+        scores  = static_score.(sources)
+        # Count as reordered if the scores are not already sorted
+        !issorted(scores) && (count += 1)
+    end
+    count
+end
+
+# ── speedup_report ────────────────────────────────────────────────────────────
+
+"""
+    speedup_report(p::SCProfile) -> String
+
+Human-readable speedup report.
+"""
+function speedup_report(p::SCProfile) :: String
+    io = IOBuffer()
+    println(io, "╔══════════════════════════════════════════╗")
+    println(io, "║  MorkSupercompiler — Profiler Report     ║")
+    println(io, "╚══════════════════════════════════════════╝")
+    println(io)
+
+    # Phase table
+    phases = [PHASE_STATS, PHASE_PLAN, PHASE_LOAD, PHASE_EXECUTE, PHASE_TOTAL]
+    names  = Dict(PHASE_STATS=>"stats", PHASE_PLAN=>"plan",
+                  PHASE_LOAD=>"load", PHASE_EXECUTE=>"execute", PHASE_TOTAL=>"TOTAL")
+
+    println(io, "  Phase        Baseline      Planned       Speedup")
+    println(io, "  ─────────────────────────────────────────────────")
+    for ph in phases
+        bt = get(p.baseline_times, ph, 0.0)
+        pt = get(p.planned_times, ph, 0.0)
+        sp = bt > 0 ? round(bt / max(pt, 1e-9); sigdigits=3) : 1.0
+        name = get(names, ph, "?")
+        println(io, "  $(rpad(name, 12)) $(rpad(_fmt_ms(bt), 14))$(rpad(_fmt_ms(pt), 14))$(sp)×")
+    end
+
+    println(io)
+    bt_exec = get(p.baseline_times, PHASE_EXECUTE, 0.0)
+    pt_exec = get(p.planned_times,  PHASE_EXECUTE, 0.0)
+    exec_speedup = bt_exec > 0 ? round(bt_exec / max(pt_exec, 1e-9); sigdigits=3) : 1.0
+    println(io, "  Execution speedup:   $(exec_speedup)×")
+    println(io, "  Sources reordered:   $(p.n_sources_reordered)")
+    println(io, "  Atoms before:        $(p.atom_count_before)")
+    println(io, "  Atoms after:         $(p.atom_count_after)")
+
+    String(take!(io))
+end
+
+_fmt_ms(t::Float64) = string(round(t * 1000; digits=2), " ms")
+
+export ProfilePhase, PHASE_STATS, PHASE_PLAN, PHASE_LOAD, PHASE_EXECUTE, PHASE_TOTAL
+export SCProfile, sc_profile, speedup_report
