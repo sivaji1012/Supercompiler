@@ -38,6 +38,8 @@ using MORK
 using PathMap
 
 include("SExpr.jl")
+include("MCore.jl")
+include("Effects.jl")
 include("Selectivity.jl")
 include("Rewrite.jl")
 include("Statistics.jl")
@@ -126,5 +128,17 @@ export reorder_program_static, reorder_program_dynamic
 export source_order_report
 export JoinNode, build_join_nodes, build_join_nodes_dynamic
 export effects_commute, EffectKind, EFF_PURE, EFF_READ, EFF_APPEND, EFF_WRITE, EFF_OBSERVE
+# MCore IR (Phase 1)
+export NodeID, NULL_NODE, EffectSet, SpaceID, DEFAULT_SPACE
+export MCoreNode, Sym, Var, Lit, Con, App, Abs, LetNode, MatchNode, MatchClause
+export Choice, ChoiceAlt, Prim, MCoreRef, UncertainNode, PBox
+export MCoreGraph, get_node
+export add_sym!, add_var!, add_lit!, add_con!, add_app!, add_abs!
+export add_let!, add_match!, add_choice!, add_prim!, add_mref!
+export compile_kb_query, compile_mm2_exec
+# Effect algebra (Phase 1)
+export Effect, ReadEffect, WriteEffect, AppendEffect
+export CreateEffect, DeleteEffect, ObserveEffect, PureEffect, PURE
+export commutes, commutes_all, is_sink_free, sink_free_check, mork_source_effects
 
 end # module
