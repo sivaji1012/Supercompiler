@@ -266,3 +266,4 @@ end
 export SCOptions, SC_DEFAULTS, SCResult
 export execute!, execute
 export timing_report
+export _cleanup_sc_tmp!

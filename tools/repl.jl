@@ -37,11 +37,11 @@ ns(src) = begin
     s
 end
 
-# Plan + run
-run(facts, prog, steps=999_999) = begin
+# Plan + run (reorder + decompose + execute — full pipeline)
+run(facts, prog, steps=typemax(Int)) = begin
     s = new_space()
     space_add_all_sexpr!(s, facts)
-    plan!(s, prog, steps)
+    run!(s, prog, steps)
     s
 end
 

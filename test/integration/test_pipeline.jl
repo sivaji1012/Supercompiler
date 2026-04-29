@@ -79,6 +79,29 @@ end
     @test n_tmp > 0   # intermediate atoms remain when cleanup disabled
 end
 
+@testset "run! — drop-in for space_metta_calculus!" begin
+    facts = "(edge 0 1) (edge 1 2) (edge 2 3)"
+    prog  = raw"(exec 0 (, (edge $x $y) (edge $y $z) (edge $z $w)) (, (dtrans $x $w)))"
+    s = new_space(); space_add_all_sexpr!(s, facts)
+    r = run!(s, prog)
+    @test r isa SCResult
+    # decomposed: 3-src → 2 stages → correct dtrans atoms, no _sc_tmp* left
+    out = space_dump_all_sexpr(s)
+    @test count(l -> occursin("dtrans", l), split(out, "\n")) > 0
+    @test count(l -> occursin("_sc_tmp", l), split(out, "\n")) == 0
+end
+
+@testset "plan! — includes decomposition" begin
+    facts = "(edge 0 1) (edge 1 2) (edge 2 3)"
+    prog  = raw"(exec 0 (, (edge $x $y) (edge $y $z) (edge $z $w)) (, (dtrans $x $w)))"
+    s = new_space(); space_add_all_sexpr!(s, facts)
+    steps = plan!(s, prog)
+    out = space_dump_all_sexpr(s)
+    @test count(l -> occursin("dtrans",  l), split(out, "\n")) > 0
+    @test count(l -> occursin("_sc_tmp", l), split(out, "\n")) == 0
+    @test steps >= 1
+end
+
 @testset "SCPipeline — decomposed output matches original" begin
     facts = "(edge 0 1) (edge 1 2) (edge 2 3)"
     prog  = raw"(exec 0 (, (edge $x $y) (edge $y $z) (edge $z $w)) (, (dtrans $x $w)))"

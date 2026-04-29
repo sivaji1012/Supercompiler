@@ -109,18 +109,36 @@ plan_program(s::Space, program::AbstractString) :: String =
 """
     plan!(s::Space, program::AbstractString, max_steps::Int=typemax(Int)) -> Int
 
-Plan, add, and execute in one call:
+Plan, decompose, add, and execute in one call:
   1. Reorder sources using btm prefix counts
-  2. Add the reordered program to `s`
-  3. Run `space_metta_calculus!(s, max_steps)`
-  4. Return steps executed.
+  2. Decompose multi-source exec atoms (Rule-of-64 fix)
+  3. Add the transformed program to `s`
+  4. Run `space_metta_calculus!(s, max_steps)`
+  5. Clean up `_sc_tmp*` intermediate atoms
+  6. Return steps executed.
 """
 function plan!(s::Space, program::AbstractString,
                max_steps::Int=typemax(Int)) :: Int
     program′ = plan_program(s, program)
+    program′ = decompose_program(program′)
     space_add_all_sexpr!(s, program′)
-    space_metta_calculus!(s, max_steps)
+    steps = space_metta_calculus!(s, max_steps)
+    _cleanup_sc_tmp!(s)
+    steps
 end
+
+"""
+    run!(s::Space, program::AbstractString, max_steps::Int=typemax(Int)) -> SCResult
+
+Drop-in replacement for `space_add_all_sexpr! + space_metta_calculus!`.
+Runs the full supercompiler pipeline: stats → plan → decompose → execute → cleanup.
+
+This is the primary entry point from the MM2 spec §10.5.
+Use instead of calling `space_metta_calculus!` directly.
+"""
+run!(s::Space, program::AbstractString,
+     max_steps::Int=typemax(Int)) :: SCResult =
+    execute!(s, program; opts=SCOptions(max_steps=max_steps))
 
 # Re-export the most useful lower-level symbols
 export plan_static, plan_program, plan!, plan_report
