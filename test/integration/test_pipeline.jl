@@ -59,3 +59,38 @@ end
     # 2 sources ≤ STAGE_MAX_SOURCES → no decomposition
     @test r.n_atoms_original == r.n_atoms_decomposed
 end
+
+@testset "SCPipeline — _sc_tmp atoms cleaned up after execution" begin
+    facts = "(edge 0 1) (edge 1 2) (edge 2 3)"
+    prog  = raw"(exec 0 (, (edge $x $y) (edge $y $z) (edge $z $w)) (, (dtrans $x $w)))"
+    s, _  = execute(facts, prog)   # cleanup=true by default
+    out   = space_dump_all_sexpr(s)
+    n_tmp = count(l -> occursin("_sc_tmp", l), split(out, "\n"))
+    @test n_tmp == 0   # no intermediate atoms left
+end
+
+@testset "SCPipeline — cleanup=false leaves _sc_tmp atoms" begin
+    facts = "(edge 0 1) (edge 1 2) (edge 2 3)"
+    prog  = raw"(exec 0 (, (edge $x $y) (edge $y $z) (edge $z $w)) (, (dtrans $x $w)))"
+    opts  = SCOptions(cleanup=false)
+    s, _  = execute(facts, prog; opts=opts)
+    out   = space_dump_all_sexpr(s)
+    n_tmp = count(l -> occursin("_sc_tmp", l), split(out, "\n"))
+    @test n_tmp > 0   # intermediate atoms remain when cleanup disabled
+end
+
+@testset "SCPipeline — decomposed output matches original" begin
+    facts = "(edge 0 1) (edge 1 2) (edge 2 3)"
+    prog  = raw"(exec 0 (, (edge $x $y) (edge $y $z) (edge $z $w)) (, (dtrans $x $w)))"
+
+    s_orig, _ = execute(facts, prog; opts=SCOptions(decompose=false))
+    s_dec,  _ = execute(facts, prog)   # decompose=true
+
+    out_orig = space_dump_all_sexpr(s_orig)
+    out_dec  = space_dump_all_sexpr(s_dec)
+
+    dtrans_orig = sort(filter(l -> occursin("dtrans", l), split(out_orig, "\n")))
+    dtrans_dec  = sort(filter(l -> occursin("dtrans", l), split(out_dec,  "\n")))
+    @test !isempty(dtrans_dec)
+    @test dtrans_orig == dtrans_dec   # same result
+end

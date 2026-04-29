@@ -10,8 +10,9 @@ Cases:
   2. counter_machine   — 5-source JZ step rule
   3. odd_even_sort     — 5-source phase rule
 
-For trans_detect, baseline O(K^3) ≈ 3.4M candidates → expected 10-100× speedup.
-For 5-source cases, O(K^5) → O(K^2) per stage → expected even larger gains.
+NOTE: steps=typemax(Int) (run to completion) is used for both baseline and
+decomposed. A decomposed N-source program needs N-1 steps minimum to complete
+all pipeline stages; using steps=1 only runs the first stage and is incorrect.
 """
 
 using MorkSupercompiler
@@ -19,14 +20,15 @@ using MORK
 
 # ── Benchmark helpers ────────────────────────────────────────────────────────
 
-function time_exec(facts::AbstractString, prog::AbstractString; trials=3) :: Float64
+function time_exec(facts::AbstractString, prog::AbstractString; trials=3,
+                   steps::Int=typemax(Int)) :: Float64
     times = Float64[]
     for _ in 1:trials
         s = new_space()
         space_add_all_sexpr!(s, facts)
         space_add_all_sexpr!(s, prog)
         t0 = time_ns()
-        space_metta_calculus!(s, 1)
+        space_metta_calculus!(s, steps)
         push!(times, (time_ns() - t0) / 1e6)   # → ms
     end
     sort!(times)
@@ -49,10 +51,25 @@ function run_case(label, facts, baseline_prog; trials=3)
         println("    ", strip(line))
     end
 
-    # Time baseline (original)
-    bt = time_exec(facts, baseline_prog; trials=trials)
-    # Time decomposed
-    dt = time_exec(facts, decomposed_prog; trials=trials)
+    # Correctness check: decomposed output must match baseline
+    s_b = new_space(); space_add_all_sexpr!(s_b, facts)
+    space_add_all_sexpr!(s_b, baseline_prog); space_metta_calculus!(s_b, typemax(Int))
+    out_b = space_dump_all_sexpr(s_b)
+
+    s_d = new_space(); space_add_all_sexpr!(s_d, facts)
+    space_add_all_sexpr!(s_d, decomposed_prog); space_metta_calculus!(s_d, typemax(Int))
+    out_d = space_dump_all_sexpr(s_d)
+
+    # Compare non-fact, non-intermediate atoms
+    filter_out(s) = sort(filter(l -> !isempty(strip(l)) &&
+                                     !occursin("edge ", l) && !occursin("_sc_tmp", l),
+                                split(s, '\n')))
+    correct = filter_out(out_b) == filter_out(out_d)
+    println("    Correctness:     $(correct ? "✓ outputs match" : "✗ MISMATCH")")
+
+    # Time with full execution (steps=typemax to complete all stages)
+    bt = time_exec(facts, baseline_prog;  trials=trials, steps=typemax(Int))
+    dt = time_exec(facts, decomposed_prog; trials=trials, steps=typemax(Int))
 
     speedup = bt / max(dt, 1e-9)
 
@@ -61,7 +78,7 @@ function run_case(label, facts, baseline_prog; trials=3)
     println("    Speedup:         $(round(speedup; sigdigits=3))×")
 
     (label=label, baseline_ms=bt, decomposed_ms=dt, speedup=speedup,
-     n_orig=n_orig, n_stages=n_stages)
+     n_orig=n_orig, n_stages=n_stages, correct=correct)
 end
 
 # ── Case 1: trans_detect (3-source, K=150 edges) ────────────────────────────

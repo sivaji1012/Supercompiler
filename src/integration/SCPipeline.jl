@@ -38,6 +38,7 @@ struct SCOptions
     max_steps             :: Int      # Stage 6: space_metta_calculus! limit
     stats_sample_frac     :: Float64  # fraction of space to sample for stats
     split_budget          :: Int      # BoundedSplit branch budget
+    cleanup_intermediates :: Bool     # Post: remove _sc_tmp* atoms from space
 end
 
 SCOptions(; max_steps   = typemax(Int),
@@ -47,8 +48,10 @@ SCOptions(; max_steps   = typemax(Int),
             saturate    = false,
             mm2_compile = false,
             sample_frac = 1.0,
-            budget      = SPLIT_DEFAULT_BUDGET) =
-    SCOptions(stats, plan, decompose, saturate, mm2_compile, max_steps, sample_frac, budget)
+            budget      = SPLIT_DEFAULT_BUDGET,
+            cleanup     = true) =
+    SCOptions(stats, plan, decompose, saturate, mm2_compile, max_steps,
+              sample_frac, budget, cleanup)
 
 const SC_DEFAULTS = SCOptions()
 
@@ -158,6 +161,12 @@ function execute!(s       :: Space,
     end
     timings[:execute] = t_exec
 
+    # Post — remove _sc_tmp* intermediate atoms left by pipeline decomposition
+    if opts.cleanup_intermediates && n_atoms_decomposed > n_atoms_original
+        t_cleanup = @elapsed _cleanup_sc_tmp!(s)
+        timings[:cleanup] = t_cleanup
+    end
+
     SCResult(steps, stats, plan_str, obligs, timings, program_planned,
              n_atoms_original, n_atoms_decomposed)
 end
@@ -176,7 +185,7 @@ function execute(facts   :: AbstractString,
     space_add_all_sexpr!(s, facts)
     opts2 = SCOptions(opts.collect_stats, opts.plan_join_order, opts.decompose_multi_source,
                       opts.saturate_kb, opts.use_mm2_compiler, steps,
-                      opts.stats_sample_frac, opts.split_budget)
+                      opts.stats_sample_frac, opts.split_budget, opts.cleanup_intermediates)
     result = execute!(s, program; opts=opts2)
     (s, result)
 end
@@ -213,6 +222,25 @@ function _sexpr_to_mcore!(g::MCoreGraph, n::SNode) :: NodeID
             return add_con!(g, Con(Symbol((head::SAtom).name), field_ids))
         end
         return add_app!(g, App(head_id, field_ids))
+    end
+end
+
+# ── Intermediate atom cleanup ─────────────────────────────────────────────────
+
+"""
+    _cleanup_sc_tmp!(s::Space)
+
+Remove all `_sc_tmp*` intermediate atoms left in the space by pipeline
+decomposition.  These are written by Stage N and read by Stage N+1;
+after execution they are no longer needed and would otherwise accumulate.
+"""
+function _cleanup_sc_tmp!(s::Space)
+    out = space_dump_all_sexpr(s)
+    for line in split(out, '\n')
+        sline = strip(line)
+        isempty(sline) && continue
+        startswith(sline, "(_sc_tmp") || continue
+        space_remove_all_sexpr!(s, sline)
     end
 end
 

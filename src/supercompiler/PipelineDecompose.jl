@@ -96,9 +96,16 @@ function decompose_exec(atom::SNode; counter::Base.RefValue{Int} = Ref(0)) :: De
     atom isa SList || return DecomposedProgram([atom], 0, 0)
     items = (atom::SList).items
 
-    # Find the first conjunction (, ...) in the items list — works for both
-    # rule form  `((head) (, sources) (template))` (conjunction at index 2)
-    # and exec form `(exec N (, sources) (, template))` (conjunction at index 3)
+    # Only decompose direct exec atoms: (exec <id> (, sources) (, template))
+    # Rule definitions like ((phase $p) (, ...) (O ...)) are NOT decomposed —
+    # MORK's space_metta_calculus! only picks up top-level `exec` atoms and
+    # the rule invocation mechanism handles them differently.
+    isempty(items) && return DecomposedProgram([atom], 0, 0)
+    !(items[1] isa SAtom && (items[1]::SAtom).name == "exec") &&
+        return DecomposedProgram([atom], 0, 0)
+
+    # Find the conjunction (, ...) — in exec form it's at index 3:
+    # (exec <id> (, sources) (, template))
     conj_idx = findfirst(i -> is_conjunction(items[i]), 1:length(items))
     conj_idx === nothing && return DecomposedProgram([atom], 0, 0)
 

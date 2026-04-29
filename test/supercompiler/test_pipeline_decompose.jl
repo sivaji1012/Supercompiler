@@ -188,7 +188,10 @@ end
 
 # ── Canonical case: odd_even_sort (5-source) ──────────────────────────────────
 
-@testset "decompose_program — odd_even_sort 5-source" begin
+@testset "decompose_program — odd_even_sort rule form NOT decomposed" begin
+    # Rule definitions like ((phase $p) (, ...) (O ...)) are NOT exec atoms.
+    # MORK only executes top-level (exec ...) atoms via space_metta_calculus!.
+    # Decomposing rule heads breaks their invocation semantics — pass through unchanged.
     prog = raw"""
     ((phase $p)
      (, (parity $i $p) (succ $i $si) (A $i $e) (A $si $se) (lt $se $e))
@@ -196,17 +199,11 @@ end
     """
     out   = decompose_program(prog)
     nodes = parse_program(out)
-    # 5 sources → should produce multiple stages
-    @test length(nodes) > 1
-    # All stages should be valid SList nodes
-    for n in nodes
-        @test n isa SList
-    end
+    @test length(nodes) == 1   # unchanged — not an exec atom
+    @test !occursin(SC_TMP_PREFIX, out)
 end
 
-# ── Canonical case: counter_machine 5-source ─────────────────────────────────
-
-@testset "decompose_program — counter_machine 5-source" begin
+@testset "decompose_program — counter_machine rule form NOT decomposed" begin
     prog = raw"""
     ((step JZ $ts)
      (, (state $ts (IC $i)) (program $i (JZ $r $j)) (state $ts (REG $r $v))
@@ -215,8 +212,14 @@ end
     """
     out   = decompose_program(prog)
     nodes = parse_program(out)
-    # 5 sources → multiple stages
-    @test length(nodes) >= 3
-    # Intermediate atoms must appear
+    @test length(nodes) == 1   # unchanged — not an exec atom
+    @test !occursin(SC_TMP_PREFIX, out)
+end
+
+@testset "decompose_program — exec 5-source IS decomposed" begin
+    # An actual exec atom with 5 sources does get decomposed
+    prog = raw"(exec 0 (, (a $x $y) (b $y $z) (c $z $u) (d $u $v) (e $v $w)) (, (r $x $w)))"
+    out  = decompose_program(prog)
+    @test length(parse_program(out)) >= 3
     @test occursin(SC_TMP_PREFIX, out)
 end
