@@ -287,6 +287,10 @@ function authoring_workflow(form::DSLForm,
     # Step 6: generate test harness
     harness = _generate_test_harness(template)
 
+    # Step 7: geometry suggestions (§11 Algorithm 4 Step 7)
+    suggestions = _suggest_geometry(template, reg)
+    !isempty(suggestions) && (report = report * "\nSUGGESTIONS:\n" * suggestions)
+
     # Step 8: register if lint passes
     success = !occursin("ERROR", report)
     success && register!(reg, template)
@@ -306,6 +310,26 @@ function _lint_template(t::GeometryTemplate, reg::SchemaRegistry) :: String
     end
     result = String(take!(io))
     isempty(result) ? "OK: template $(t.name) passed linting" : result
+end
+
+function _suggest_geometry(t::GeometryTemplate, reg::SchemaRegistry) :: String
+    io = IOBuffer()
+    g = geometry_of(t)
+    # §11: "ask the planner for geometry suggestions or backend affinity report"
+    if g == GEOM_FACTOR && :evidence_monotone in t.laws
+        println(io, "  Consider adding EvidenceCapsule (Trie geometry) for evidence accounting.")
+    end
+    if g == GEOM_DAG && isempty(t.coercions)
+        println(io, "  Consider registering T_DAG_to_Factor coercion for EDA model lifting.")
+    end
+    if length(t.operators) > 5 && !is_hybrid(t)
+        println(io, "  Many operators — consider splitting into Hybrid geometry (Factor + Trie).")
+    end
+    existing = search(reg; semantic_kind=t.semantic_type.kind)
+    if !isempty(existing) && geometry_of(existing[1]) != g
+        println(io, "  Similar template '$(existing[1].name)' uses $(geometry_of(existing[1])) — verify geometry choice.")
+    end
+    String(take!(io))
 end
 
 function _generate_test_harness(t::GeometryTemplate) :: String

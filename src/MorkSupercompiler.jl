@@ -251,7 +251,7 @@ export TyLADirection, F_DIRECTION, G_DIRECTION
 export PolicyFamily, LOCAL_REWRITE_POLICY, FIXED_POINT_MESSAGE_POLICY
 export PREFIX_SHARD_POLICY, PATCH_LOG_SHARD_POLICY, DEME_AGENT_POLICY, default_policy
 export LocalConcurrencyContract, DistributedExecContract, CacheContract
-export GeometryTemplate, is_valid_template, geometry_of, make_template
+export GeometryTemplate, is_valid_template, geometry_of, all_geometries, is_hybrid, policy_families, make_template
 export TEMPLATE_HEURISTIC_MP, TEMPLATE_EVIDENCE_CAPSULE
 export SchemaRegistry, register!, lookup, search, coercion_path, GLOBAL_REGISTRY
 export DSLForm, AuthoringResult, authoring_workflow

@@ -295,7 +295,11 @@ function _build_cache_keys(graph::FactorGraph, active::Set{Symbol}) :: Dict{Symb
 end
 
 function _infer_demand_family(template::GeometryTemplate) :: Symbol
-    :backward_demand in template.operators ? :backward_demand : :forward_only
+    # §10.1.3 Step 1: infer demand family from declared operators
+    :backward_demand in template.operators && return :backward_demand
+    :adjoint_need    in template.operators && return :adjoint_need
+    :demand_push     in template.operators && return :demand_push
+    :forward_only
 end
 
 function _get_truth_family(template::GeometryTemplate) :: Symbol

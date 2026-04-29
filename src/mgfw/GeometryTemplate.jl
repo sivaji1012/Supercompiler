@@ -254,18 +254,25 @@ struct GeometryTemplate
     local_concurrency :: LocalConcurrencyContract
     distributed_exec  :: DistributedExecContract
     backend_affinity  :: Dict{Symbol, Symbol}
+    noether_charge    :: Union{Symbol, Nothing}   # §12.2: conserved quantity name, or nothing
 end
 
 """
     is_valid_template(t::GeometryTemplate) -> Bool
 
-Check all 13 fields are populated (non-empty where required).
+Check all 13 spec fields are populated (non-empty where required).
+Validates: name, operators, semantic_type args, laws, local_concurrency,
+distributed_exec, backend_affinity, and exactness class.
 """
 function is_valid_template(t::GeometryTemplate) :: Bool
-    t.name != :unnamed                    &&
-    !isempty(t.operators)                 &&
-    length(t.semantic_type.args) > 0      &&
-    true   # all fields present by construction
+    t.name != :unnamed                         || return false
+    !isempty(t.operators)                      || return false
+    length(t.semantic_type.args) > 0           || return false
+    !isempty(t.local_concurrency.unit_of_parallelism) || return false
+    !isempty(t.local_concurrency.merge_law |> string) || return false
+    !isempty(t.distributed_exec.state_model |> string) || return false
+    !isempty(t.backend_affinity)               || return false
+    true
 end
 
 """
@@ -277,6 +284,32 @@ function geometry_of(t::GeometryTemplate) :: GeomTag
     t.presentation isa GeomTag && return t.presentation::GeomTag
     (t.presentation::HybridGeom).components[1]
 end
+
+"""
+    all_geometries(t::GeometryTemplate) -> Vector{GeomTag}
+
+All geometry tags for a template, preserving Hybrid composition.
+Use this (not geometry_of) when full multi-geometry information is needed.
+"""
+function all_geometries(t::GeometryTemplate) :: Vector{GeomTag}
+    t.presentation isa GeomTag && return [t.presentation::GeomTag]
+    collect((t.presentation::HybridGeom).components)
+end
+
+"""
+    is_hybrid(t::GeometryTemplate) -> Bool
+
+Returns true iff this template uses multiple geometry presentations.
+"""
+is_hybrid(t::GeometryTemplate) :: Bool = t.presentation isa HybridGeom
+
+"""
+    policy_families(t::GeometryTemplate) -> Vector{PolicyFamily}
+
+All policy families applicable to this template (one per geometry for Hybrid).
+"""
+policy_families(t::GeometryTemplate) :: Vector{PolicyFamily} =
+    [default_policy(g) for g in all_geometries(t)]
 
 # ── Built-in templates (from §12.2 worked examples) ──────────────────────────
 
@@ -291,7 +324,8 @@ function make_template(name      :: Symbol,
                        cache     :: CacheContract   = CacheContract(),
                        exactness :: ErrorLevel      = EXACT,
                        coercions :: Vector{Coercion}= Coercion[],
-                       affinity  :: Dict{Symbol,Symbol} = Dict{Symbol,Symbol}()) :: GeometryTemplate
+                       affinity  :: Dict{Symbol,Symbol} = Dict{Symbol,Symbol}(),
+                       noether   :: Union{Symbol,Nothing} = nothing) :: GeometryTemplate
 
     GeometryTemplate(
         name, sem_type, geom, operators,
@@ -299,7 +333,8 @@ function make_template(name      :: Symbol,
         laws, symmetries, cache, exactness, coercions,
         default_local_concurrency(geom),
         default_distributed_exec(geom),
-        isempty(affinity) ? Dict(:mm2 => :high, :mork => :high) : affinity)
+        isempty(affinity) ? Dict(:mm2 => :high, :mork => :high) : affinity,
+        noether)
 end
 
 # §12.2 canonical examples
@@ -321,7 +356,8 @@ const TEMPLATE_EVIDENCE_CAPSULE = make_template(
     operators = [:mint_token, :sketch_union, :overlap_estimate, :merge_capsule],
     effects   = [ReadEffect(DEFAULT_SPACE), AppendEffect(DEFAULT_SPACE)],
     laws      = [:idempotent_merge, :commutative_merge, :evidence_monotone],
-    cache     = CacheContract([:capsule_cid, :sketch_cid], [:new_token_mint]))
+    cache     = CacheContract([:capsule_cid, :sketch_cid], [:new_token_mint]),
+    noether   = :evidence_mass)   # §12.2: evidence mass is the conserved Noether charge
 
 export PolicyFamily
 export LOCAL_REWRITE_POLICY, FIXED_POINT_MESSAGE_POLICY, PREFIX_SHARD_POLICY
@@ -329,5 +365,6 @@ export PATCH_LOG_SHARD_POLICY, DEME_AGENT_POLICY, default_policy
 export LocalConcurrencyContract, default_local_concurrency
 export DistributedExecContract, default_distributed_exec
 export CacheContract, GeometryTemplate
-export is_valid_template, geometry_of, make_template
+export is_valid_template, geometry_of, all_geometries, is_hybrid, policy_families
+export make_template
 export TEMPLATE_HEURISTIC_MP, TEMPLATE_EVIDENCE_CAPSULE
