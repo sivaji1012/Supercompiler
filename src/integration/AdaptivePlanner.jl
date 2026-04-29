@@ -60,7 +60,7 @@ function AdaptivePlan(s::Space, program::AbstractString) :: AdaptivePlan
     AdaptivePlan(
         String(program), prog, stats,
         space_val_count(s), 1, 0,
-        copy(stats.predicate_counts))
+        copy(predicate_counts(stats)))
 end
 
 # ── Algorithm 5 — ShouldReplan (§5.2.2) ──────────────────────────────────────
@@ -88,7 +88,7 @@ function should_replan(ap::AdaptivePlan, s::Space) :: Bool
     # Condition 2: per-predicate drift
     new_total = current_total
     for (pred, old_card) in ap.cardinality_cache
-        new_card = get(ap.stats.predicate_counts, pred, old_card)
+        new_card = get(predicate_counts(ap.stats), pred, old_card)
         old_card == 0 && continue
         drift = abs(new_card - old_card) / old_card
         drift > REPLAN_DRIFT && return true
@@ -113,7 +113,7 @@ function replan!(ap::AdaptivePlan, s::Space) :: Bool
     ap.atom_count_base   = space_val_count(s)
     ap.plan_version     += 1
     ap.calls_since_plan  = 0
-    ap.cardinality_cache = copy(new_stats.predicate_counts)
+    ap.cardinality_cache = copy(predicate_counts(new_stats))
     changed
 end
 

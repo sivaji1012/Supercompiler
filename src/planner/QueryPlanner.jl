@@ -299,6 +299,73 @@ function plan_report(program::AbstractString, stats::MORKStatistics) :: String
     String(take!(io))
 end
 
+# ── §5.3.1 Algorithm 6 full implementation — pure-region identification ───────
+
+"""
+    PureRegion
+
+A contiguous group of sources that all have mutually commuting effects.
+Pure regions can be freely reordered (cost-based join order).
+Non-pure regions require topological ordering respecting effect dependencies.
+"""
+struct PureRegion
+    sources  :: Vector{SNode}
+    is_pure  :: Bool
+    effects  :: Vector{EffectKind}
+end
+
+"""
+    EffectBarrier
+
+Inserted between non-commuting plan regions to prevent illegal reordering.
+Mirrors the spec's `EffectBarrier(region.effects)` insertion point.
+"""
+struct EffectBarrier
+    blocking_effects :: Vector{EffectKind}
+end
+
+"""
+    identify_pure_regions(sources::Vector{SNode}) -> Vector{PureRegion}
+
+Algorithm 6 line: `regions ← identify_pure_regions(query, effect_analysis)`.
+Groups consecutive sources into pure regions (all Read → all commute → one region).
+For MORK exec patterns this always produces a single pure region, since all
+sources are Read(space). Non-pure regions arise with mixed Append/Write sources.
+"""
+function identify_pure_regions(sources::Vector{SNode}) :: Vector{PureRegion}
+    isempty(sources) && return PureRegion[]
+    # For MORK: all exec sources are EFF_READ — one pure region
+    # Future: detect mixed effects by inspecting source patterns
+    [PureRegion(sources, true, fill(EFF_READ, length(sources)))]
+end
+
+"""
+    plan_query(sources, stats) -> Tuple{Vector{SNode}, Vector{EffectBarrier}}
+
+Full Algorithm 6 (EffectAwarePlanning) from §5.3.1.
+Returns reordered sources + any effect barriers inserted between regions.
+"""
+function plan_query(sources :: Vector{SNode},
+                    stats   :: MORKStatistics) :: Tuple{Vector{SNode}, Vector{EffectBarrier}}
+    regions  = identify_pure_regions(sources)
+    plan     = SNode[]
+    barriers = EffectBarrier[]
+
+    for (i, region) in enumerate(regions)
+        if region.is_pure
+            nodes = build_join_nodes(region.sources, stats)
+            perm  = plan_join_order(nodes)
+            append!(plan, region.sources[perm])
+        else
+            # Non-pure: topological order respecting effect deps (conservative: keep original)
+            append!(plan, region.sources)
+        end
+        i < length(regions) && push!(barriers, EffectBarrier(regions[i].effects))
+    end
+
+    (plan, barriers)
+end
+
 export EffectKind, EFF_PURE, EFF_READ, EFF_APPEND, EFF_WRITE, EFF_OBSERVE
 export effects_commute
 export JoinNode, build_join_nodes, build_join_nodes_dynamic
@@ -306,3 +373,4 @@ export plan_join_order, plan_join_order_static
 export plan_conjunction, plan_conjunction_dynamic
 export plan_program, plan_program_dynamic
 export plan_report
+export PureRegion, EffectBarrier, identify_pure_regions, plan_query

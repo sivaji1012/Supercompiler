@@ -199,7 +199,7 @@ function _split_kb_symbolic(g, node::Prim, id, env, stats, budget) :: SplitResul
     branches = Branch[]
 
     # Each predicate in stats is a potential match branch
-    sorted_preds = sort(collect(stats.predicate_counts); by=x->-x[2])
+    sorted_preds = sort(collect(predicate_counts(stats)); by=x->-x[2])
     cumulative   = 0.0
     budget_hit   = false
 
