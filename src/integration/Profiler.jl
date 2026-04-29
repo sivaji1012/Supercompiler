@@ -20,6 +20,7 @@ using MORK: Space, new_space, space_add_all_sexpr!, space_metta_calculus!
 @enum ProfilePhase begin
     PHASE_STATS
     PHASE_PLAN
+    PHASE_DECOMPOSE
     PHASE_LOAD
     PHASE_EXECUTE
     PHASE_TOTAL
@@ -36,9 +37,10 @@ Comparison between baseline (no planning) and planned execution.
   planned_times   — phase → seconds for planned run
   baseline_steps  — steps executed without planning
   planned_steps   — steps executed with planning
-  atom_count_before — space size before loading program
-  atom_count_after  — space size after execution
+  atom_count_before   — space size before loading program
+  atom_count_after    — space size after execution
   n_sources_reordered — number of source lists that were reordered
+  n_atoms_decomposed  — extra exec atoms added by pipeline decomposition
 """
 struct SCProfile
     baseline_times      :: Dict{ProfilePhase, Float64}
@@ -48,6 +50,7 @@ struct SCProfile
     atom_count_before   :: Int
     atom_count_after    :: Int
     n_sources_reordered :: Int
+    n_atoms_decomposed  :: Int
 end
 
 # ── profile ────────────────────────────────────────────────────────────────
@@ -75,17 +78,22 @@ function profile(facts   :: AbstractString,
     # Count sources reordered (static check, no space needed)
     n_reordered = _count_reordered_sources(program)
 
+    # Count extra atoms added by decomposition
+    orig_prog      = plan_static(program)
+    decomposed_prog = decompose_program(orig_prog)
+    n_decomposed   = length(parse_program(decomposed_prog)) -
+                     length(parse_program(orig_prog))
+
     # Baseline: load unmodified program, time execution
     baseline_times = _run_trial(facts, program, steps, trials, false, sample_frac)
 
-    # Planned: reorder sources, time planning + execution
+    # Planned: reorder + decompose sources, time all phases
     planned_times = _run_trial(facts, program, steps, trials, true, sample_frac)
 
     # Atom count after one planned run
     s2 = new_space()
     space_add_all_sexpr!(s2, facts)
-    planned_prog = plan_static(program)
-    space_add_all_sexpr!(s2, planned_prog)
+    space_add_all_sexpr!(s2, decomposed_prog)
     space_metta_calculus!(s2, steps)
     n_after = space_val_count(s2)
 
@@ -96,7 +104,8 @@ function profile(facts   :: AbstractString,
         _extract_steps(planned_times),
         n_before,
         n_after,
-        n_reordered)
+        n_reordered,
+        n_decomposed)
 end
 
 function _run_trial(facts, program, steps, trials, do_plan, sample_frac) :: Dict{ProfilePhase, Float64}
@@ -114,13 +123,20 @@ function _run_trial(facts, program, steps, trials, do_plan, sample_frac) :: Dict
         end
         t[PHASE_STATS] = stats_time
 
-        # Plan phase
+        # Plan phase (join-order reordering)
         plan_time = 0.0
         prog_to_use = program
         if do_plan
             plan_time = @elapsed (prog_to_use = plan_static(program))
         end
         t[PHASE_PLAN] = plan_time
+
+        # Decompose phase (Rule-of-64 fix)
+        decompose_time = 0.0
+        if do_plan
+            decompose_time = @elapsed (prog_to_use = decompose_program(prog_to_use))
+        end
+        t[PHASE_DECOMPOSE] = decompose_time
 
         # Build space + load facts
         s = new_space()
@@ -132,7 +148,7 @@ function _run_trial(facts, program, steps, trials, do_plan, sample_frac) :: Dict
         # Execute
         t[PHASE_EXECUTE] = @elapsed space_metta_calculus!(s, steps)
 
-        total = t[PHASE_STATS] + t[PHASE_PLAN] + t[PHASE_LOAD] + t[PHASE_EXECUTE]
+        total = t[PHASE_STATS] + t[PHASE_PLAN] + t[PHASE_DECOMPOSE] + t[PHASE_LOAD] + t[PHASE_EXECUTE]
         t[PHASE_TOTAL] = total
         all_times[i] = t
     end
@@ -181,8 +197,8 @@ function speedup_report(p::SCProfile) :: String
     println(io)
 
     # Phase table
-    phases = [PHASE_STATS, PHASE_PLAN, PHASE_LOAD, PHASE_EXECUTE, PHASE_TOTAL]
-    names  = Dict(PHASE_STATS=>"stats", PHASE_PLAN=>"plan",
+    phases = [PHASE_STATS, PHASE_PLAN, PHASE_DECOMPOSE, PHASE_LOAD, PHASE_EXECUTE, PHASE_TOTAL]
+    names  = Dict(PHASE_STATS=>"stats", PHASE_PLAN=>"plan", PHASE_DECOMPOSE=>"decompose",
                   PHASE_LOAD=>"load", PHASE_EXECUTE=>"execute", PHASE_TOTAL=>"TOTAL")
 
     println(io, "  Phase        Baseline      Planned       Speedup")
@@ -201,6 +217,8 @@ function speedup_report(p::SCProfile) :: String
     exec_speedup = bt_exec > 0 ? round(bt_exec / max(pt_exec, 1e-9); sigdigits=3) : 1.0
     println(io, "  Execution speedup:   $(exec_speedup)×")
     println(io, "  Sources reordered:   $(p.n_sources_reordered)")
+    p.n_atoms_decomposed > 0 &&
+        println(io, "  Extra stages added:  +$(p.n_atoms_decomposed) (decomposition)")
     println(io, "  Atoms before:        $(p.atom_count_before)")
     println(io, "  Atoms after:         $(p.atom_count_after)")
 
@@ -209,5 +227,5 @@ end
 
 _fmt_ms(t::Float64) = string(round(t * 1000; digits=2), " ms")
 
-export ProfilePhase, PHASE_STATS, PHASE_PLAN, PHASE_LOAD, PHASE_EXECUTE, PHASE_TOTAL
+export ProfilePhase, PHASE_STATS, PHASE_PLAN, PHASE_DECOMPOSE, PHASE_LOAD, PHASE_EXECUTE, PHASE_TOTAL
 export SCProfile, profile, speedup_report

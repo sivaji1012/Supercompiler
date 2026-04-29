@@ -32,3 +32,30 @@ end
     @test !isempty(rep)
     @test occursin("execute", rep)
 end
+
+@testset "SCPipeline — decompose stage fires for 3-source program" begin
+    facts = "(edge 0 1) (edge 1 2) (edge 2 3)"
+    prog  = raw"(exec 0 (, (edge $x $y) (edge $y $z) (edge $z $w)) (, (dtrans $x $w)))"
+    _, r  = execute(facts, prog; steps=1)
+    # decompose=true by default: 1 original atom → 2 stages
+    @test r.n_atoms_original == 1
+    @test r.n_atoms_decomposed == 2
+    @test haskey(r.timings, :decompose)
+end
+
+@testset "SCPipeline — decompose=false skips decomposition" begin
+    facts = "(edge 0 1) (edge 1 2) (edge 2 3)"
+    prog  = raw"(exec 0 (, (edge $x $y) (edge $y $z) (edge $z $w)) (, (dtrans $x $w)))"
+    opts  = SCOptions(decompose=false)
+    _, r  = execute(facts, prog; opts=opts, steps=1)
+    @test r.n_atoms_original == r.n_atoms_decomposed   # no change
+    @test !haskey(r.timings, :decompose)
+end
+
+@testset "SCPipeline — 2-source program unchanged by decompose" begin
+    facts = "(edge 0 1) (edge 1 2)"
+    prog  = raw"(exec 0 (, (edge $x $y) (edge $y $z)) (, (path $x $z)))"
+    _, r  = execute(facts, prog; steps=1)
+    # 2 sources ≤ STAGE_MAX_SOURCES → no decomposition
+    @test r.n_atoms_original == r.n_atoms_decomposed
+end

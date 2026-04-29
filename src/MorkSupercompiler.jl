@@ -176,7 +176,8 @@ export compile_sequential!, compile_conditional!, compile_node!, compile_program
 export sprint_mcore_to_mm2
 # Integration layer (Phase 4)
 export SCOptions, SC_DEFAULTS, SCResult, run!, execute, timing_report
-export ProfilePhase, SCProfile, profile, speedup_report
+export ProfilePhase, PHASE_STATS, PHASE_PLAN, PHASE_DECOMPOSE, PHASE_LOAD, PHASE_EXECUTE, PHASE_TOTAL
+export SCProfile, profile, speedup_report
 export explain, to_dot, diff_programs
 export AdaptivePlan, should_replan, replan!, run_adaptive!, update_stats!
 

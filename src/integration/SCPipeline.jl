@@ -2,19 +2,22 @@
 SCPipeline — end-to-end supercompiler pipeline.
 
 Closes the loop from spec §10.4 (Production Hardening):
-  stats → plan → (optional KB saturation) → compile → execute
+  stats → plan → decompose → (optional KB saturation) → compile → execute
 
 A single `execute!` call replaces the manual sequence of:
-  collect_stats → plan_program → space_add_all_sexpr! → space_metta_calculus!
+  collect_stats → plan_program → decompose_program →
+  space_add_all_sexpr! → space_metta_calculus!
 
 and adds bisimulation obligation recording, timing, and replanning support.
 
 Pipeline stages (all optional, controlled via SCOptions):
-  1. STATS    — collect MORKStatistics from the space (or use cached)
-  2. PLAN     — QueryPlanner join-order optimization (Algorithm 6)
-  3. SATURATE — KBSaturation incremental saturation on background facts
-  4. COMPILE  — MM2Compiler lowers M-Core frags to exec s-expressions
-  5. EXECUTE  — space_add_all_sexpr! + space_metta_calculus!
+  1. STATS     — collect MORKStatistics from the space (or use cached)
+  2. PLAN      — QueryPlanner join-order optimization (Algorithm 6)
+  3. DECOMPOSE — PipelineDecompose: split N-source conjunctions → chained
+                 2-source stages (Rule-of-64 fix, O(K^N)→O(K^2) per stage)
+  4. SATURATE  — KBSaturation incremental saturation on background facts
+  5. COMPILE   — MM2Compiler lowers M-Core frags to exec s-expressions
+  6. EXECUTE   — space_add_all_sexpr! + space_metta_calculus!
 """
 
 using MORK: Space, new_space, space_add_all_sexpr!, space_metta_calculus!, space_val_count
@@ -27,23 +30,25 @@ using MORK: Space, new_space, space_add_all_sexpr!, space_metta_calculus!, space
 Controls which pipeline stages are active and their parameters.
 """
 struct SCOptions
-    collect_stats    :: Bool     # Stage 1: collect MORKStatistics
-    plan_join_order  :: Bool     # Stage 2: QueryPlanner reordering
-    saturate_kb      :: Bool     # Stage 3: KBSaturation on background
-    use_mm2_compiler :: Bool     # Stage 4: lower through MM2Compiler
-    max_steps        :: Int      # Stage 5: space_metta_calculus! limit
-    stats_sample_frac:: Float64  # fraction of space to sample for stats
-    split_budget     :: Int      # BoundedSplit branch budget
+    collect_stats         :: Bool     # Stage 1: collect MORKStatistics
+    plan_join_order       :: Bool     # Stage 2: QueryPlanner reordering
+    decompose_multi_source:: Bool     # Stage 3: PipelineDecompose (Rule-of-64 fix)
+    saturate_kb           :: Bool     # Stage 4: KBSaturation on background
+    use_mm2_compiler      :: Bool     # Stage 5: lower through MM2Compiler
+    max_steps             :: Int      # Stage 6: space_metta_calculus! limit
+    stats_sample_frac     :: Float64  # fraction of space to sample for stats
+    split_budget          :: Int      # BoundedSplit branch budget
 end
 
 SCOptions(; max_steps   = typemax(Int),
             plan        = true,
             stats       = true,
+            decompose   = true,
             saturate    = false,
             mm2_compile = false,
             sample_frac = 1.0,
             budget      = SPLIT_DEFAULT_BUDGET) =
-    SCOptions(stats, plan, saturate, mm2_compile, max_steps, sample_frac, budget)
+    SCOptions(stats, plan, decompose, saturate, mm2_compile, max_steps, sample_frac, budget)
 
 const SC_DEFAULTS = SCOptions()
 
@@ -62,12 +67,14 @@ Output of the supercompiler pipeline.
   program_planned — the reordered program string actually loaded
 """
 struct SCResult
-    steps_executed  :: Int
-    stats           :: MORKStatistics
-    plan_report_str :: String
-    obligs          :: Vector{BiSimObligation}
-    timings         :: Dict{Symbol, Float64}
-    program_planned :: String
+    steps_executed    :: Int
+    stats             :: MORKStatistics
+    plan_report_str   :: String
+    obligs            :: Vector{BiSimObligation}
+    timings           :: Dict{Symbol, Float64}
+    program_planned   :: String
+    n_atoms_original  :: Int   # atom count before decomposition
+    n_atoms_decomposed:: Int   # atom count after decomposition (≥ original)
 end
 
 # ── Main pipeline entry point ─────────────────────────────────────────────────
@@ -108,7 +115,18 @@ function execute!(s       :: Space,
         (String(program), "")
     end
 
-    # Stage 3 — optional KB saturation on background facts
+    # Stage 3 — pipeline decomposition (Rule-of-64 fix)
+    n_atoms_original   = length(parse_program(program_planned))
+    n_atoms_decomposed = n_atoms_original
+    if opts.decompose_multi_source
+        t = @elapsed begin
+            program_planned   = decompose_program(program_planned)
+            n_atoms_decomposed = length(parse_program(program_planned))
+        end
+        timings[:decompose] = t
+    end
+
+    # Stage 4 — optional KB saturation on background facts
     if opts.saturate_kb
         t = @elapsed begin
             kb = KBState(MCoreGraph())
@@ -140,7 +158,8 @@ function execute!(s       :: Space,
     end
     timings[:execute] = t_exec
 
-    SCResult(steps, stats, plan_str, obligs, timings, program_planned)
+    SCResult(steps, stats, plan_str, obligs, timings, program_planned,
+             n_atoms_original, n_atoms_decomposed)
 end
 
 """
@@ -155,8 +174,9 @@ function execute(facts   :: AbstractString,
                 steps   :: Int = typemax(Int)) :: Tuple{Space, SCResult}
     s = new_space()
     space_add_all_sexpr!(s, facts)
-    opts2 = SCOptions(opts.collect_stats, opts.plan_join_order, opts.saturate_kb,
-                      opts.use_mm2_compiler, steps, opts.stats_sample_frac, opts.split_budget)
+    opts2 = SCOptions(opts.collect_stats, opts.plan_join_order, opts.decompose_multi_source,
+                      opts.saturate_kb, opts.use_mm2_compiler, steps,
+                      opts.stats_sample_frac, opts.split_budget)
     result = execute!(s, program; opts=opts2)
     (s, result)
 end
@@ -210,6 +230,8 @@ function timing_report(r::SCResult) :: String
     println(io, "  $(rpad(:total, 12)) $(round(total*1000; digits=2)) ms")
     println(io, "  steps_executed: $(r.steps_executed)")
     !isempty(r.obligs) && println(io, "  bisim_obligs: $(length(r.obligs))")
+    r.n_atoms_decomposed > r.n_atoms_original &&
+        println(io, "  decomposed:   $(r.n_atoms_original) → $(r.n_atoms_decomposed) atoms")
     String(take!(io))
 end
 
