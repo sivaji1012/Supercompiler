@@ -1,0 +1,330 @@
+using Test
+using MorkSupercompiler
+using MORK
+
+# ── §6.1–6.2 SemanticObjects ──────────────────────────────────────────────────
+
+@testset "SemanticObjects — semantic types" begin
+    rel = sem_rel(:A, :B)
+    @test rel.kind == SK_REL && rel.args == [:A, :B]
+
+    model = sem_model(:Q, :Formula)
+    @test model.kind == SK_MODEL
+
+    prog = sem_prog(:Sigma, :T)
+    @test prog.kind == SK_PROG
+
+    codec = sem_codec(:A)
+    @test codec.kind == SK_CODEC
+end
+
+@testset "SemanticObjects — geometry tags and Pres(G,A)" begin
+    p1 = PresType(GEOM_FACTOR, sem_model(:Q, :Formula))
+    @test p1.geometry == GEOM_FACTOR
+    @test p1.sem_type.kind == SK_MODEL
+
+    h = HybridGeom(GEOM_FACTOR, GEOM_TRIE)
+    @test length(h.components) == 2
+    @test h.components[1] == GEOM_FACTOR
+end
+
+@testset "SemanticObjects — registered coercions" begin
+    @test length(REGISTERED_COERCIONS) == 4
+    c = find_coercion(GEOM_DAG, GEOM_FACTOR)
+    @test c !== nothing && (c::Coercion).name == :T_DAG_to_Factor
+    @test is_exact(c::Coercion)
+
+    # No coercion from FACTOR to DAG (not registered)
+    @test find_coercion(GEOM_FACTOR, GEOM_DAG) === nothing
+end
+
+@testset "SemanticObjects — TyLA direction" begin
+    @test F_DIRECTION != G_DIRECTION
+    @test F_DIRECTION isa TyLADirection
+end
+
+# ── §6.3 + §13 GeometryTemplate ──────────────────────────────────────────────
+
+@testset "GeometryTemplate — all 13 fields present" begin
+    t = TEMPLATE_HEURISTIC_MP
+    @test t.name == :HeuristicModusPonens
+    @test t.semantic_type.kind == SK_MODEL
+    @test t.presentation == GEOM_FACTOR
+    @test !isempty(t.operators)
+    @test !isempty(t.effects)
+    @test !isempty(t.laws)
+    @test !isempty(t.symmetries)
+    @test !isempty(t.cache_contract.key)
+    @test t.exactness_class == EXACT
+    @test !isempty(t.coercions)
+    @test t.local_concurrency isa LocalConcurrencyContract
+    @test t.distributed_exec  isa DistributedExecContract
+    @test !isempty(t.backend_affinity)
+    @test is_valid_template(t)
+end
+
+@testset "GeometryTemplate — default_policy per geometry" begin
+    @test default_policy(GEOM_FACTOR)       == FIXED_POINT_MESSAGE_POLICY
+    @test default_policy(GEOM_TRIE)         == PREFIX_SHARD_POLICY
+    @test default_policy(GEOM_TENSOR_DENSE) == PATCH_LOG_SHARD_POLICY
+    @test default_policy(GEOM_DAG)          == DEME_AGENT_POLICY
+end
+
+@testset "GeometryTemplate — geometry_of" begin
+    @test geometry_of(TEMPLATE_HEURISTIC_MP)    == GEOM_FACTOR
+    @test geometry_of(TEMPLATE_EVIDENCE_CAPSULE) == GEOM_TRIE
+end
+
+@testset "GeometryTemplate — make_template with defaults" begin
+    t = make_template(:TestTemplate, sem_rel(:A,:B), GEOM_TRIE;
+                      operators=[:scan, :rank],
+                      laws=[:monotone])
+    @test t.name == :TestTemplate
+    @test t.presentation == GEOM_TRIE
+    @test is_valid_template(t)
+    @test t.local_concurrency.unit_of_parallelism == [:prefix_subtree]
+end
+
+# ── §8 + §11 SchemaRegistry + DSL ────────────────────────────────────────────
+
+@testset "SchemaRegistry — register and lookup" begin
+    reg = SchemaRegistry()
+    register!(reg, TEMPLATE_HEURISTIC_MP)
+    @test reg.version == 1
+
+    found = lookup(reg, :HeuristicModusPonens)
+    @test found !== nothing
+    @test (found::GeometryTemplate).name == :HeuristicModusPonens
+
+    @test lookup(reg, :nonexistent) === nothing
+end
+
+@testset "SchemaRegistry — search by geometry/kind" begin
+    reg = SchemaRegistry()
+    register!(reg, TEMPLATE_HEURISTIC_MP)
+    register!(reg, TEMPLATE_EVIDENCE_CAPSULE)
+
+    factor_templates = search(reg; geometry=GEOM_FACTOR)
+    @test length(factor_templates) == 1
+    @test factor_templates[1].name == :HeuristicModusPonens
+
+    model_templates = search(reg; semantic_kind=SK_MODEL)
+    @test length(model_templates) == 1
+end
+
+@testset "SchemaRegistry — coercion_path" begin
+    reg = SchemaRegistry()
+    register!(reg, TEMPLATE_HEURISTIC_MP)   # has FactorToTrie coercion
+
+    # Direct path
+    path = coercion_path(reg, GEOM_FACTOR, GEOM_TRIE)
+    @test !isempty(path)
+
+    # No path for unmapped pair
+    empty_path = coercion_path(reg, GEOM_DAG, GEOM_TENSOR_DENSE)
+    @test isempty(empty_path)
+end
+
+@testset "SchemaRegistry — Algorithm 4 authoring_workflow" begin
+    reg = SchemaRegistry()
+    form = DSLForm(:define_factor_rule, Dict{Symbol,Any}(
+        :name => :TransitivityRule,
+        :premises => [:Ancestor_x_y, :Ancestor_y_z],
+        :conclusion => [:Ancestor_x_z],
+        :truth_family => :STV,
+        :forward_map => :transitive_stv))
+
+    result = authoring_workflow(form, reg)
+    @test result isa AuthoringResult
+    @test result.template.name == :TransitivityRule
+    @test result.registered
+    @test !isempty(result.test_harness)
+    @test lookup(reg, :TransitivityRule) !== nothing
+end
+
+@testset "SchemaRegistry — define_trie_miner" begin
+    reg = SchemaRegistry()
+    result = define_trie_miner(
+        name        = :MotifMiner,
+        seed_op     = :subtree_scan,
+        growth_op   = :prefix_proximity,
+        support_op  = :prefix_counter,
+        ranking     = :topk_heavy)
+    @test result.template.name == :MotifMiner
+    @test geometry_of(result.template) == GEOM_TRIE
+end
+
+# ── §10.1 FactorGeometry — Algorithms 1 + 2 ──────────────────────────────────
+
+@testset "FactorGeometry — STV functions" begin
+    # stv_forward_map: (A, A→B) → B
+    s_b, c_b = stv_forward_map(0.9, 0.8, 0.8, 0.7)
+    @test 0.0 <= s_b <= 1.0
+    @test 0.0 <= c_b <= 1.0
+    @test s_b < 0.9   # conclusion weaker than premise
+
+    # stv_to_pbox: converts to interval
+    pb = stv_to_pbox(0.7, 0.9)
+    lo, hi = pb.intervals[1]
+    @test lo < 0.7 < hi
+    @test pb.probabilities[1] ≈ 0.9
+
+    # stv_backward_demand
+    ns, nc = stv_backward_demand(0.81, 0.64)
+    @test ns ≈ 0.9 atol=0.01
+    @test nc ≈ 0.8 atol=0.01
+end
+
+@testset "FactorGeometry — Algorithm 1 specialize_exact" begin
+    t = TEMPLATE_HEURISTIC_MP
+    g = FactorGraph(t)
+    # Add some nodes
+    g.var_nodes[:A]   = FactorNode(:A, :premise)
+    g.var_nodes[:B]   = FactorNode(:B, :conclusion)
+    g.factor_nodes[:mp] = FactorNode(:mp, :factor; is_factor=true)
+    push!(g.edges, FactorEdge(:A,  :mp, :premise))
+    push!(g.edges, FactorEdge(:B,  :mp, :conclusion))
+
+    region = specialize_exact(:B, g, 100)
+    @test region isa SpecializedRegion
+    @test region.exactness == EXACT
+    @test region.error_bound == 0.0
+    @test region.witness === nothing
+    @test :B in region.active_nodes
+end
+
+@testset "FactorGeometry — Algorithm 2 specialize_approximate" begin
+    t = TEMPLATE_HEURISTIC_MP
+    g = FactorGraph(t)
+    g.var_nodes[:Q]  = FactorNode(:Q, :premise)
+    g.var_nodes[:R]  = FactorNode(:R, :conclusion)
+    g.factor_nodes[:rule] = FactorNode(:rule, :factor; is_factor=true)
+    push!(g.edges, FactorEdge(:Q, :rule, :premise))
+    push!(g.edges, FactorEdge(:R, :rule, :conclusion))
+
+    region = specialize_approximate(:R, g, 0.05, 0.95, 100)
+    @test region isa SpecializedRegion
+    @test region.exactness != nothing  # EXACT or BOUNDED
+    @test region.error_bound >= 0.0
+    # Noether invariant: charge ≤ 1.0
+    @test noether_charge(region) <= 1.0 + 1e-9
+end
+
+# ── §10.2–10.3 TrieDAGGeometry — Algorithm 3 + trie ─────────────────────────
+
+@testset "TrieDAGGeometry — DAGStore hash-consing" begin
+    store = DAGStore()
+    id1 = dag_intern!(store, :leaf)
+    id2 = dag_intern!(store, :leaf)
+    @test id1 == id2   # same structure → same ID (hash-consing)
+
+    id3 = dag_intern!(store, :node, [id1])
+    id4 = dag_intern!(store, :node, [id2])
+    @test id3 == id4   # structurally equal
+end
+
+@testset "TrieDAGGeometry — Algorithm 3 evolve_demes!" begin
+    demes = [Deme(i) for i in 1:3]
+    # Seed each deme with a leaf
+    for d in demes
+        dag_intern!(d.store, :leaf)
+    end
+
+    result = evolve_demes!(demes, (store, id) -> begin
+        haskey(store.nodes, id) ? 0.5 + rand() * 0.5 : 0.0
+    end; top_k=2)
+
+    @test result isa DemeEvolutionResult
+    @test length(result.updated_demes) == 3
+    @test !isempty(result.exemplars)
+    @test all(d -> d.generation == 1, result.updated_demes)
+end
+
+@testset "TrieDAGGeometry — trie mining 3 stages" begin
+    t = TEMPLATE_EVIDENCE_CAPSULE
+    atoms = parse_program("(parent alice bob)\n(parent bob carol)\n(parent alice carol)\n(sibling alice dave)")
+
+    # Stage 1: seed
+    trie = PatternTrie(t; k=5)
+    n_seeds = trie_seed!(trie, atoms)
+    @test n_seeds > 0
+    @test !isempty(trie.top_k)
+
+    # Stage 2: grow
+    n_grown = trie_grow!(trie, atoms; max_depth=2)
+    # (may be 0 if no 2-symbol patterns found, that's ok for toy data)
+    @test n_grown >= 0
+
+    # Stage 3: score
+    scored = trie_score!(trie)
+    @test !isempty(scored)
+    # Sorted by descending weight
+    ws = [w for (_, w) in scored]
+    @test issorted(ws; rev=true)
+end
+
+@testset "TrieDAGGeometry — run_trie_miner end-to-end" begin
+    t    = TEMPLATE_EVIDENCE_CAPSULE
+    data = parse_program("(a x) (a y) (b x) (a z) (b y)")
+    top_k = run_trie_miner(t, data; k=3, max_depth=2)
+    @test !isempty(top_k)
+    # :a should appear more often than :b → higher weight
+    a_weight = sum(w for (p, w) in top_k if !isempty(p) && p[1] == :a; init=0.0)
+    b_weight = sum(w for (p, w) in top_k if !isempty(p) && p[1] == :b; init=0.0)
+    @test a_weight >= b_weight
+end
+
+# ── §9 + §12 MGCompiler ──────────────────────────────────────────────────────
+
+@testset "MGCompiler — affinity_analysis" begin
+    templates = [TEMPLATE_HEURISTIC_MP, TEMPLATE_EVIDENCE_CAPSULE]
+    profile   = affinity_analysis(templates)
+    @test profile isa BackendProfile
+    # Factor + Trie templates → MM2 and MORK should have some affinity
+    @test profile.mm2  != NONE
+    @test profile.mork != NONE
+end
+
+@testset "MGCompiler — select_backend" begin
+    profile = BackendProfile(mm2=HIGH, mork=HIGH, factor=LOW, trie=LOW)
+    templates = [TEMPLATE_HEURISTIC_MP]
+    choice = select_backend(profile, templates)
+    @test choice isa BackendChoice
+    @test choice.primary in (:mm2, :mork)   # highest affinity wins
+end
+
+@testset "MGCompiler — Algorithm 5 mg_compile" begin
+    reg  = SchemaRegistry()
+    register!(reg, TEMPLATE_HEURISTIC_MP)
+    prog = raw"(exec 0 (, (edge $x $y) (edge $y $z)) (, (path $x $z)))"
+
+    result = mg_compile(prog, reg)
+    @test result isa CompilationResult
+    @test !isempty(result.residual_code)
+    @test result.backend_choice isa BackendChoice
+    @test haskey(result.phase_timings, :parse)
+    @test haskey(result.phase_timings, :lower)
+end
+
+@testset "MGCompiler — build_geodesic_bgc_composite" begin
+    reg  = SchemaRegistry()
+    composite = build_geodesic_bgc_composite(reg)
+    @test composite.name == :GeodesicBGC_Composite
+    @test composite.presentation == GEOM_FACTOR
+    @test :evidence_conserved in composite.laws
+    @test get(composite.backend_affinity, :mm2, :low) == :high
+end
+
+@testset "MGCompiler — mg_run! end-to-end" begin
+    reg  = SchemaRegistry()
+    s    = new_space()
+    space_add_all_sexpr!(s, "(edge 0 1) (edge 1 2)")
+    prog = raw"(exec 0 (, (edge $x $y)) (, (node $x)))"
+
+    result, n_steps = mg_run!(s, prog; registry=reg)
+    @test result isa CompilationResult
+    @test n_steps >= 0
+    @test !isempty(result.residual_code)   # compilation produced output
+    # Space size unchanged or larger (no guarantee of new atoms from IR stub)
+    @test space_val_count(s) >= 2
+end

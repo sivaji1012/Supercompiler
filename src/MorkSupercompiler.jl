@@ -70,10 +70,19 @@ include("integration/AdaptivePlanner.jl")
 
 # Layer 8 — Approximate Supercompilation (Doc 2, approx spec)
 include("approx/PBoxAlgebra.jl")
+
 include("approx/UncertainQuery.jl")
 include("approx/UncertainInference.jl")
 include("approx/ApproxMOSES.jl")
 include("approx/ApproxPipeline.jl")
+
+# Layer 9 — Multi-Geometry Framework (Doc 3, mg_framework_spec)
+include("mgfw/SemanticObjects.jl")
+include("mgfw/GeometryTemplate.jl")
+include("mgfw/SchemaRegistry.jl")
+include("mgfw/FactorGeometry.jl")
+include("mgfw/TrieDAGGeometry.jl")
+include("mgfw/MGCompiler.jl")
 
 # ── High-level public API ─────────────────────────────────────────────────────
 
@@ -200,6 +209,7 @@ export SCOptions, SC_DEFAULTS, SCResult, sc_run!, sc_run, timing_report
 export ProfilePhase, SCProfile, sc_profile, speedup_report
 export sc_explain, sc_dot, sc_diff
 export AdaptivePlan, should_replan, replan!, sc_run_adaptive!, update_stats!
+
 export MAX_PLAN_AGE, REPLAN_DRIFT
 # Approx Layer (Doc 2)
 export pbox_exact, pbox_point, pbox_interval, pbox_empty
@@ -229,5 +239,32 @@ export CompactShape, shape_subsumes, extract_shape
 export FixedArgMask, CanonicalKBSig, CanonicalEffectSig, CanonicalPathSig
 export canonical_key, subsumes
 export FoldTable, record!, lookup_fold, can_fold
+# MG Framework (Doc 3)
+export SemanticKind, SK_REL, SK_PROG, SK_MODEL, SK_CODEC, SK_SCHED, SK_STREAM
+export SemanticType, sem_rel, sem_prog, sem_model, sem_codec, sem_sched, sem_stream
+export GeomTag, GEOM_FACTOR, GEOM_DAG, GEOM_TRIE, GEOM_TENSOR_SPARSE, GEOM_TENSOR_DENSE
+export HybridGeom, PresType
+export MGType, MGUnit, MGVoid, MGBase, MGProd, MGSum, MGFun, MGSemType, MGPres
+export Coercion, is_exact, find_coercion, REGISTERED_COERCIONS
+export T_DAG_TO_FACTOR, T_FACTOR_TO_TRIE, T_TRIE_TO_TENSOR, T_TRIE_TO_CODEC
+export TyLADirection, F_DIRECTION, G_DIRECTION
+export PolicyFamily, LOCAL_REWRITE_POLICY, FIXED_POINT_MESSAGE_POLICY
+export PREFIX_SHARD_POLICY, PATCH_LOG_SHARD_POLICY, DEME_AGENT_POLICY, default_policy
+export LocalConcurrencyContract, DistributedExecContract, CacheContract
+export GeometryTemplate, is_valid_template, geometry_of, make_template
+export TEMPLATE_HEURISTIC_MP, TEMPLATE_EVIDENCE_CAPSULE
+export SchemaRegistry, register!, lookup, search, coercion_path, GLOBAL_REGISTRY
+export DSLForm, AuthoringResult, authoring_workflow
+export define_factor_rule, define_trie_miner, define_codec_search
+export FactorNode, FactorEdge, FactorGraph, SpecializedRegion
+export specialize_exact, specialize_approximate
+export stv_forward_map, stv_to_pbox, stv_backward_demand
+export noether_charge, conserves_evidence
+export DAGNode, DAGStore, dag_intern!, Deme, DemeEvolutionResult, evolve_demes!
+export PatternTrie, trie_seed!, trie_grow!, trie_score!, run_trie_miner
+export AffinityLevel, HIGH, MEDIUM, LOW, NONE
+export BackendProfile, BackendChoice
+export affinity_analysis, select_backend, CompilationResult, mg_compile, mg_run!
+export build_geodesic_bgc_composite
 
 end # module

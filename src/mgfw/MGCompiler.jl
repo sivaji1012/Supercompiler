@@ -1,0 +1,394 @@
+"""
+MGCompiler — geometry-aware compilation and supercompilation pipeline.
+
+Implements §9 and §12 of the MG Framework spec (Goertzel, April 2026):
+  §9    Backend affinity and late commitment — 4-stage decision process
+  §12.1 Algorithm 5 — Geometry-aware compilation pipeline (9 steps)
+  §12.2 Worked example: supercompiling geodesic inference control
+        (GeodesicBGC-Worklist, FactorFGSurrogate, EvidenceCapsule, Composite)
+
+The "late commitment" principle (§9): "hard decision (actual lowering) should
+happen late" — soft affinity analysis first, then backend-neutral optimization,
+then backend selection, then backend-specific polishing.
+
+The supercompiler's TyLAA role (§7.5): given the "blue" layer (geometry
+templates with typed contracts), find the **weakest operational semantics**
+consistent with those contracts — making fewest scheduling distinctions while
+preserving observational equivalence.
+"""
+
+using MORK: Space, new_space, space_add_all_sexpr!, space_metta_calculus!
+
+# ── §9 Backend affinity types ─────────────────────────────────────────────────
+
+"""
+    BackendAffinity
+
+How strongly a region prefers a given backend (§9).
+  HIGH   — strong preference (region uses backend-specific features)
+  MEDIUM — moderate preference (region works well on this backend)
+  LOW    — weak preference (backend works but not optimal)
+  NONE   — backend not applicable
+"""
+@enum AffinityLevel HIGH MEDIUM LOW NONE
+
+"""
+    BackendProfile
+
+Affinity scores for all supported backends (§9).
+"""
+struct BackendProfile
+    mm2         :: AffinityLevel   # MM2 worklist patterns
+    mork        :: AffinityLevel   # MORK-native operations
+    factor      :: AffinityLevel   # Factor graph runtime
+    trie        :: AffinityLevel   # Trie/PathMap runtime
+    tensor      :: AffinityLevel   # GPU tensor kernels
+    petta       :: AffinityLevel   # PeTTa (Prolog-based)
+end
+
+BackendProfile(; mm2=MEDIUM, mork=MEDIUM, factor=LOW, trie=LOW, tensor=NONE, petta=LOW) =
+    BackendProfile(mm2, mork, factor, trie, tensor, petta)
+
+"""
+    BackendChoice
+
+The result of backend selection (stage 3 of §9).
+  primary   — main backend to use
+  fallback  — backup if primary is unavailable
+  is_hybrid — true if multiple backends needed (mixed execution)
+"""
+struct BackendChoice
+    primary   :: Symbol
+    fallback  :: Symbol
+    is_hybrid :: Bool
+end
+
+# ── §9 Four-stage late commitment ─────────────────────────────────────────────
+
+"""
+    affinity_analysis(templates) -> BackendProfile
+
+§9 Stage 1: Soft backend affinity analysis. Inspects geometry templates,
+effects, and laws to suggest backend preferences WITHOUT committing.
+"""
+function affinity_analysis(templates::Vector{GeometryTemplate}) :: BackendProfile
+    mm2_score  = 0
+    mork_score = 0
+    factor_score = 0
+    trie_score = 0
+
+    for t in templates
+        g = geometry_of(t)
+        aff = t.backend_affinity
+
+        # Geometry signals
+        g == GEOM_FACTOR       && (factor_score += 2; mm2_score  += 1; mork_score += 1)
+        g == GEOM_TRIE         && (trie_score   += 2; mork_score += 2)
+        g == GEOM_DAG          && (mm2_score    += 2; mork_score += 1)
+        g == GEOM_TENSOR_SPARSE && (mork_score  += 1)
+        g == GEOM_TENSOR_DENSE  && nothing   # tensor/GPU low unless batched
+
+        # Template-level hints
+        get(aff, :mm2, :medium)  == :high && (mm2_score  += 2)
+        get(aff, :mork, :medium) == :high && (mork_score += 2)
+        :sink_free in t.laws             && (mm2_score   += 1)
+        :monotone  in t.laws             && (mork_score  += 1)
+    end
+
+    n = max(1, length(templates))
+    _score_to_affinity(x) = x ÷ n >= 3 ? HIGH : x ÷ n >= 2 ? MEDIUM : x ÷ n >= 1 ? LOW : NONE
+
+    BackendProfile(
+        mm2    = _score_to_affinity(mm2_score),
+        mork   = _score_to_affinity(mork_score),
+        factor = _score_to_affinity(factor_score),
+        trie   = _score_to_affinity(trie_score))
+end
+
+"""
+    backend_neutral_optimize(templates, stats) -> Vector{GeometryTemplate}
+
+§9 Stage 2: Backend-aware but backend-neutral IR optimization.
+Applies transformations that are beneficial regardless of final backend:
+  - Join ordering (from QueryPlanner)
+  - Source reordering
+  - Cache contract enforcement
+"""
+function backend_neutral_optimize(templates :: Vector{GeometryTemplate},
+                                   stats    :: MORKStatistics) :: Vector{GeometryTemplate}
+    # Apply join-order optimization to each template's operators
+    # (In full implementation: re-order operators based on cardinality stats)
+    templates  # stub: full IR optimization deferred
+end
+
+"""
+    select_backend(profile, templates) -> BackendChoice
+
+§9 Stage 3: Backend selection.  Pick the backend with highest affinity.
+"""
+function select_backend(profile   :: BackendProfile,
+                         templates :: Vector{GeometryTemplate}) :: BackendChoice
+    # Highest-affinity backend wins
+    scores = [(:mm2, profile.mm2), (:mork, profile.mork),
+              (:factor, profile.factor), (:trie, profile.trie)]
+    # HIGH=0 < MEDIUM=1 < LOW=2 < NONE=3 — argmin picks highest affinity
+    best_idx = argmin(Int(s[2]) for s in scores)
+    primary  = scores[best_idx][1]
+
+    # Fallback: second best
+    rest        = [s for s in scores if s[1] != primary]
+    fallback_idx = isempty(rest) ? nothing : argmin(Int(s[2]) for s in rest)
+    fallback     = fallback_idx === nothing ? :direct : rest[fallback_idx][1]
+
+    # Hybrid if factor + trie both HIGH (e.g., GeodesicBGC-Composite)
+    is_hybrid = profile.factor >= MEDIUM && profile.trie >= MEDIUM
+
+    BackendChoice(primary, fallback, is_hybrid)
+end
+
+"""
+    polish(code, choice) -> String
+
+§9 Stage 4: Backend-specific polishing.
+For MM2: ensures priority pairs are assigned correctly.
+For MORK: ensures atom byte encoding is correct.
+"""
+function polish(code::String, choice::BackendChoice) :: String
+    # For now: pass-through (backend-specific polishing hooks)
+    code
+end
+
+# ── §12.1 Algorithm 5 — Geometry-aware compilation pipeline ──────────────────
+
+"""
+    CompilationResult
+
+Result of Algorithm 5 (9-step geometry-aware pipeline, §12.1).
+  residual_code   — lowered executable code (MM2 exec s-expressions or other)
+  backend_choice  — selected backend
+  templates_used  — all geometry templates involved
+  coercion_chain  — coercions applied
+  proof_artifacts — bisimulation obligations + exactness witnesses
+  profile         — backend affinity scores
+  phase_timings   :: Dict
+"""
+struct CompilationResult
+    residual_code   :: String
+    backend_choice  :: BackendChoice
+    templates_used  :: Vector{GeometryTemplate}
+    coercion_chain  :: Vector{Coercion}
+    proof_artifacts :: Vector{BiSimObligation}
+    profile         :: BackendProfile
+    phase_timings   :: Dict{Symbol, Float64}
+end
+
+"""
+    mg_compile(region::AbstractString, registry::SchemaRegistry;
+               stats=MORKStatistics(), error_tolerance=0.0) -> CompilationResult
+
+Algorithm 5 (Geometry-aware compilation and supercompilation pipeline, §12.1):
+9 steps:
+  1.  Parse and infer semantic objects and effect regions
+  2.  Attach initial presentations from the framework registry
+  3.  Compute backend affinities and candidate coercion graph
+  4.  Run geometry-aware planning and selective supercompilation
+  5.  Choose exact or approximate kernels subject to cost and witness constraints
+  6.  Choose concurrency and distribution policies
+  7.  Select backend(s): PeTTa, MM2, tensor, trie, factor, or hybrid
+  8.  Lower to residual executable code and runtime metadata
+  9.  Return mixed executable + proof/witness artifacts
+"""
+function mg_compile(region          :: AbstractString,
+                    registry        :: SchemaRegistry = GLOBAL_REGISTRY;
+                    stats           :: MORKStatistics = MORKStatistics(),
+                    error_tolerance :: Float64        = 0.0) :: CompilationResult
+
+    timings = Dict{Symbol, Float64}()
+
+    # Step 1: Parse region → SNodes → infer semantic types
+    t1 = @elapsed begin
+        nodes   = parse_program(region)
+        sem_types = _infer_semantic_types(nodes)
+    end
+    timings[:parse] = t1
+
+    # Step 2: Attach initial presentations from registry
+    t2 = @elapsed begin
+        templates = _attach_presentations(sem_types, registry)
+    end
+    timings[:attach] = t2
+
+    # Step 3: Backend affinity analysis + coercion graph
+    t3 = @elapsed begin
+        profile  = affinity_analysis(templates)
+        coercions = _build_coercion_chain(templates, registry)
+    end
+    timings[:affinity] = t3
+
+    # Step 4: Geometry-aware planning (join ordering via QueryPlanner)
+    t4 = @elapsed begin
+        optimized_templates = backend_neutral_optimize(templates, stats)
+        planned_region = plan_program(region, stats)
+    end
+    timings[:plan] = t4
+
+    # Step 5: Exact or approximate kernels
+    t5 = @elapsed begin
+        use_approx = error_tolerance > 0.0
+        region_to_compile = planned_region
+    end
+    timings[:kernel_choice] = t5
+
+    # Step 6: Concurrency and distribution policies
+    t6 = @elapsed begin
+        _apply_concurrency_policies!(templates)
+    end
+    timings[:concurrency] = t6
+
+    # Step 7: Backend selection
+    t7 = @elapsed begin
+        choice = select_backend(profile, templates)
+    end
+    timings[:backend_select] = t7
+
+    # Step 8: Lower to executable code
+    t8 = @elapsed begin
+        g      = MCoreGraph()
+        root_ids = _sexpr_to_mcore!(g, parse_sexpr("(dummy)")) |> x -> [x]
+        for node in parse_program(region_to_compile)
+            push!(root_ids, _sexpr_to_mcore!(g, node))
+        end
+        residual, obligs = compile_program(g, root_ids)
+        residual = polish(residual, choice)
+    end
+    timings[:lower] = t8
+
+    # Step 9: Return
+    CompilationResult(
+        residual, choice, optimized_templates, coercions,
+        obligs, profile, timings)
+end
+
+# ── §12.2 Geodesic BGC composite template ─────────────────────────────────────
+
+"""
+    build_geodesic_bgc_composite(reg) -> GeometryTemplate
+
+§12.2: Build the GeodesicBGC-Composite template — the worked example of
+multi-geometry composition (DualWorklist + Factor + Trie).
+
+Components:
+  scheduler → GeodesicBGC-Worklist (DualWorklist geometry)
+  guidance  → FactorFGSurrogate (Factor geometry)
+  evidence  → EvidenceCapsule (Trie geometry)
+
+Data flow:
+  scheduler → guidance  via :active_subgraph_query
+  guidance  → scheduler via :fg_score_update
+  scheduler → evidence  via :capsule_transport
+  evidence  → scheduler via :overlap_veto
+"""
+function build_geodesic_bgc_composite(reg::SchemaRegistry) :: GeometryTemplate
+    make_template(
+        :GeodesicBGC_Composite,
+        sem_model(:Q, :Formula),
+        GEOM_FACTOR;  # primary geometry
+        operators = [:scheduler_pop, :guidance_update, :evidence_update, :splice_check],
+        effects   = [ReadEffect(DEFAULT_SPACE), AppendEffect(DEFAULT_SPACE),
+                     ObserveEffect(DEFAULT_SPACE)],
+        laws      = [:monotone_priority, :anytime_splice, :evidence_conserved],
+        cache     = CacheContract([:capsule_cid, :sketch_cid, :epoch], [:new_token_mint]),
+        exactness = EXACT,
+        affinity  = Dict(:mm2 => :high, :mork => :high, :tensor => :low))
+end
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+function _infer_semantic_types(nodes::Vector{SNode}) :: Vector{SemanticType}
+    types = SemanticType[]
+    for node in nodes
+        node isa SList || continue
+        items = (node::SList).items
+        isempty(items) && continue
+        # Heuristic: exec atoms → Sched, rule atoms → Model, query atoms → Rel
+        head = items[1]
+        if head isa SAtom
+            name = (head::SAtom).name
+            if name == "exec"
+                push!(types, sem_sched(:A))
+            elseif length(items) >= 3 && is_conjunction(items[2])
+                push!(types, sem_model(:Q, :Formula))
+            else
+                push!(types, sem_rel(:A, :B))
+            end
+        end
+    end
+    isempty(types) ? [sem_model(:Q, :Formula)] : types
+end
+
+function _attach_presentations(sem_types::Vector{SemanticType},
+                                reg::SchemaRegistry) :: Vector{GeometryTemplate}
+    templates = GeometryTemplate[]
+    for st in sem_types
+        # Find best matching template in registry
+        candidates = search(reg; semantic_kind=st.kind)
+        if !isempty(candidates)
+            push!(templates, candidates[1])
+        else
+            # Create a default template
+            geom = st.kind == SK_MODEL ? GEOM_FACTOR :
+                   st.kind == SK_PROG  ? GEOM_DAG    :
+                   st.kind == SK_CODEC ? GEOM_TRIE   : GEOM_FACTOR
+            push!(templates, make_template(
+                Symbol("auto_$(st.kind)"), st, geom;
+                operators=[:read, :write],
+                effects=[ReadEffect(DEFAULT_SPACE)]))
+        end
+    end
+    isempty(templates) ? [TEMPLATE_HEURISTIC_MP] : templates
+end
+
+function _build_coercion_chain(templates::Vector{GeometryTemplate},
+                                reg::SchemaRegistry) :: Vector{Coercion}
+    coercions = Coercion[]
+    for i in 1:length(templates)-1
+        g1 = geometry_of(templates[i])
+        g2 = geometry_of(templates[i+1])
+        g1 == g2 && continue
+        path = coercion_path(reg, g1, g2)
+        append!(coercions, path)
+    end
+    # Also add registered minimum coercions
+    append!(coercions, REGISTERED_COERCIONS)
+    coercions
+end
+
+function _apply_concurrency_policies!(templates::Vector{GeometryTemplate})
+    # Validate that local_concurrency.commutes_when is consistent with effects
+    # (stub: full TyLAA verification deferred per §15.3)
+end
+
+"""
+    mg_run!(s::Space, region::AbstractString; kwargs...) -> Tuple{CompilationResult, Int}
+
+High-level entry point: compile + execute a region.
+Compiles via mg_compile, then loads and runs in MORK Space.
+"""
+function mg_run!(s      :: Space,
+                 region :: AbstractString;
+                 registry  :: SchemaRegistry = GLOBAL_REGISTRY,
+                 stats     :: MORKStatistics = MORKStatistics(),
+                 max_steps :: Int            = typemax(Int),
+                 kwargs...) :: Tuple{CompilationResult, Int}
+
+    result = mg_compile(region, registry; stats=stats, kwargs...)
+    space_add_all_sexpr!(s, result.residual_code)
+    n_steps = space_metta_calculus!(s, max_steps)
+    (result, n_steps)
+end
+
+export AffinityLevel, HIGH, MEDIUM, LOW, NONE
+export BackendProfile, BackendChoice
+export affinity_analysis, backend_neutral_optimize, select_backend, polish
+export CompilationResult, mg_compile, mg_run!
+export build_geodesic_bgc_composite

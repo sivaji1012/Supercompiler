@@ -34,6 +34,9 @@ using MorkSupercompiler
     include("integration/test_explainer.jl")
     include("integration/test_adaptive_planner.jl")
 
+    # ── Multi-Geometry Framework (Doc 3) ─────────────────────────────────────
+    include("mgfw/test_mgfw.jl")
+
     # ── Approximate Supercompilation (Doc 2) ──────────────────────────────────
     include("approx/test_pbox_algebra.jl")
     include("approx/test_uncertain_query.jl")
