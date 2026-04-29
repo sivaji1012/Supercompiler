@@ -52,6 +52,11 @@ include("planner/QueryPlanner.jl")
 # Layer 4 — Source rewriting (join-order reordering)
 include("rewrite/Rewrite.jl")
 
+# Layer 5 — Core Supercompiler (§6 of MM2 spec)
+include("supercompiler/Stepper.jl")
+include("supercompiler/CanonicalKeys.jl")
+include("supercompiler/BoundedSplit.jl")
+
 # ── High-level public API ─────────────────────────────────────────────────────
 
 """
@@ -147,5 +152,20 @@ export compile_kb_query, compile_mm2_exec
 export Effect, ReadEffect, WriteEffect, AppendEffect
 export CreateEffect, DeleteEffect, ObserveEffect, PureEffect, PURE
 export commutes, commutes_all, is_sink_free, sink_free_check, mork_source_effects
+# Stepper (Phase 2)
+export StepResult, Value, Blocked, Residual
+export Env, env_lookup, env_extend
+export DepSet, can_proceed, add_dep
+export PrimRegistry, register_prim!, lookup_prim, DEFAULT_PRIM_REGISTRY
+export rewrite_once, step_to_value
+# CanonicalKeys (Phase 2)
+# BoundedSplit (Phase 2)
+export Branch, SplitResult, bounded_split
+export SPLIT_PROB_THRESHOLD, SPLIT_DEFAULT_BUDGET
+# CanonicalKeys (Phase 2)
+export CompactShape, shape_subsumes, extract_shape
+export FixedArgMask, CanonicalKBSig, CanonicalEffectSig, CanonicalPathSig
+export canonical_key, subsumes
+export FoldTable, record!, lookup_fold, can_fold
 
 end # module
