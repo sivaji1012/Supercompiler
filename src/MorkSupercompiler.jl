@@ -37,13 +37,20 @@ module MorkSupercompiler
 using MORK
 using PathMap
 
-include("SExpr.jl")
-include("MCore.jl")
-include("Effects.jl")
-include("Selectivity.jl")
-include("Rewrite.jl")
-include("Statistics.jl")
-include("QueryPlanner.jl")
+# Layer 1 — Surface syntax (s-expression parser)
+include("frontend/SExpr.jl")
+
+# Layer 2 — Core IR + Effect algebra (§3 + §4 of MM2 spec)
+include("core/MCore.jl")
+include("core/Effects.jl")
+
+# Layer 3 — Query Planner (§5 of MM2 spec)
+include("planner/Selectivity.jl")
+include("planner/Statistics.jl")
+include("planner/QueryPlanner.jl")
+
+# Layer 4 — Source rewriting (join-order reordering)
+include("rewrite/Rewrite.jl")
 
 # ── High-level public API ─────────────────────────────────────────────────────
 
