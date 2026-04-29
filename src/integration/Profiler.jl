@@ -4,7 +4,7 @@ Profiler — per-phase timing and baseline-vs-planned speedup measurement.
 Implements §10.4 performance profiling from the MM2 Supercompiler spec.
 
 Usage:
-  profile = sc_profile(facts, program; steps=5)
+  profile = profile(facts, program; steps=5)
   println(speedup_report(profile))
 
 The profiler runs both the baseline (no planning) and the planned version
@@ -50,10 +50,10 @@ struct SCProfile
     n_sources_reordered :: Int
 end
 
-# ── sc_profile ────────────────────────────────────────────────────────────────
+# ── profile ────────────────────────────────────────────────────────────────
 
 """
-    sc_profile(facts, program; steps, trials, sample_frac) -> SCProfile
+    profile(facts, program; steps, trials, sample_frac) -> SCProfile
 
 Measure baseline vs. planned execution on `program` loaded into a space
 pre-populated with `facts`.  Runs `trials` repetitions and returns the
@@ -61,7 +61,7 @@ median timing.
 
 `steps` limits `space_metta_calculus!` so the measurement completes quickly.
 """
-function sc_profile(facts   :: AbstractString,
+function profile(facts   :: AbstractString,
                     program :: AbstractString;
                     steps   :: Int     = 10,
                     trials  :: Int     = 3,
@@ -84,7 +84,7 @@ function sc_profile(facts   :: AbstractString,
     # Atom count after one planned run
     s2 = new_space()
     space_add_all_sexpr!(s2, facts)
-    planned_prog = sc_plan_static(program)
+    planned_prog = plan_static(program)
     space_add_all_sexpr!(s2, planned_prog)
     space_metta_calculus!(s2, steps)
     n_after = space_val_count(s2)
@@ -118,7 +118,7 @@ function _run_trial(facts, program, steps, trials, do_plan, sample_frac) :: Dict
         plan_time = 0.0
         prog_to_use = program
         if do_plan
-            plan_time = @elapsed (prog_to_use = sc_plan_static(program))
+            plan_time = @elapsed (prog_to_use = plan_static(program))
         end
         t[PHASE_PLAN] = plan_time
 
@@ -210,4 +210,4 @@ end
 _fmt_ms(t::Float64) = string(round(t * 1000; digits=2), " ms")
 
 export ProfilePhase, PHASE_STATS, PHASE_PLAN, PHASE_LOAD, PHASE_EXECUTE, PHASE_TOTAL
-export SCProfile, sc_profile, speedup_report
+export SCProfile, profile, speedup_report

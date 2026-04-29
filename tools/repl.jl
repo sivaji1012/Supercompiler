@@ -1,11 +1,11 @@
 #!/usr/bin/env julia
-# tools/sc_repl.jl — MorkSupercompiler development REPL
+# tools/repl.jl — MorkSupercompiler development REPL
 #
 # Interactive (warm, hot-reload, recommended):
-#   julia --project=. -i tools/sc_repl.jl
+#   julia --project=. -i tools/repl.jl
 #
 # Scripted (pipe expressions):
-#   echo 'include("/tmp/test.jl")' | julia --project=. tools/sc_repl.jl
+#   echo 'include("/tmp/test.jl")' | julia --project=. tools/repl.jl
 #
 # NEVER cold-start julia for iteration — each restart costs 80s JIT.
 # Use this REPL + Revise for all development.
@@ -21,13 +21,13 @@ using MORK
 t(path=joinpath(@__DIR__,"..","test","runtests.jl")) = include(path)
 
 # Parse + reorder a program string
-plan(prog) = sc_plan_static(prog)
+plan(prog) = plan_static(prog)
 
 # Analyse join order: show report for prog given a space with facts
 report(facts_prog, prog) = begin
     s = new_space()
     space_add_all_sexpr!(s, facts_prog)
-    print(sc_plan_report(s, prog))
+    print(plan_report(s, prog))
 end
 
 # Quick space builder
@@ -41,7 +41,7 @@ end
 run(facts, prog, steps=999_999) = begin
     s = new_space()
     space_add_all_sexpr!(s, facts)
-    sc_plan!(s, prog, steps)
+    plan!(s, prog, steps)
     s
 end
 

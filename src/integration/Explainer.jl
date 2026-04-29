@@ -3,18 +3,18 @@ Explainer — debugging and visualization for the supercompiler.
 
 Implements §10.4 debugging tools from the spec.
 
-  sc_explain(s, program)  → human-readable plan report (join order, cardinalities,
+  explain(s, program)  → human-readable plan report (join order, cardinalities,
                              canonical keys, split decisions)
-  sc_dot(program)         → Graphviz DOT source for the source-dependency graph
-  sc_diff(before, after)  → diff two programs showing what changed after planning
+  to_dot(program)         → Graphviz DOT source for the source-dependency graph
+  diff_programs(before, after)  → diff two programs showing what changed after planning
 """
 
 using MORK: Space
 
-# ── sc_explain ────────────────────────────────────────────────────────────────
+# ── explain ────────────────────────────────────────────────────────────────
 
 """
-    sc_explain(s::Space, program::AbstractString) -> String
+    explain(s::Space, program::AbstractString) -> String
 
 Full explanation of what the supercompiler does to `program`:
   - Join order for each multi-source conjunction (with cardinality estimates)
@@ -22,7 +22,7 @@ Full explanation of what the supercompiler does to `program`:
   - Canonical key preview for termination analysis
   - BoundedSplit threshold note for any Choice/multi-source patterns
 """
-function sc_explain(s::Space, program::AbstractString) :: String
+function explain(s::Space, program::AbstractString) :: String
     io    = IOBuffer()
     stats = collect_stats(s)
     nodes = parse_program(program)
@@ -91,10 +91,10 @@ function _explain_variable_flow(io, sources, jnodes, perm)
     end
 end
 
-# ── sc_dot ────────────────────────────────────────────────────────────────────
+# ── to_dot ────────────────────────────────────────────────────────────────────
 
 """
-    sc_dot(program::AbstractString; stats=nothing) -> String
+    to_dot(program::AbstractString; stats=nothing) -> String
 
 Generate a Graphviz DOT source string visualizing the source-dependency graph
 for all multi-source conjunctions in `program`.
@@ -105,7 +105,7 @@ sources in the planned order.  Node color encodes estimated cardinality
 
 Paste the output into https://dreampuf.github.io/GraphvizOnline/ to visualize.
 """
-function sc_dot(program::AbstractString;
+function to_dot(program::AbstractString;
                 stats::Union{MORKStatistics, Nothing} = nothing) :: String
     io    = IOBuffer()
     nodes = parse_program(program)
@@ -167,17 +167,17 @@ function _cardinality_color(card::Int, total::Int) :: String
                  "\"#FFB6C1\""      # red
 end
 
-# ── sc_diff ───────────────────────────────────────────────────────────────────
+# ── diff_programs ───────────────────────────────────────────────────────────────────
 
 """
-    sc_diff(original::AbstractString, planned::AbstractString) -> String
+    diff_programs(original::AbstractString, planned::AbstractString) -> String
 
 Show what changed between the original program and its planned version.
 Each changed atom is printed as:
   - original source order
   + planned source order
 """
-function sc_diff(original::AbstractString, planned::AbstractString) :: String
+function diff_programs(original::AbstractString, planned::AbstractString) :: String
     io     = IOBuffer()
     orig_n = parse_program(original)
     plan_n = parse_program(planned)
@@ -197,4 +197,4 @@ function sc_diff(original::AbstractString, planned::AbstractString) :: String
     String(take!(io))
 end
 
-export sc_explain, sc_dot, sc_diff
+export explain, to_dot, diff_programs

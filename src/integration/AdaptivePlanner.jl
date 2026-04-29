@@ -15,7 +15,7 @@ us use a simpler threshold than a bidirectional drift check.
 
 Usage:
   ap = AdaptivePlan(s, program)        # build initial plan
-  sc_run_adaptive!(s, ap, new_facts)   # update + maybe replan
+  run_adaptive!(s, ap, new_facts)   # update + maybe replan
 """
 
 using MORK: Space, space_val_count, space_add_all_sexpr!, space_metta_calculus!
@@ -117,10 +117,10 @@ function replan!(ap::AdaptivePlan, s::Space) :: Bool
     changed
 end
 
-# ── sc_run_adaptive! ──────────────────────────────────────────────────────────
+# ── run_adaptive! ──────────────────────────────────────────────────────────
 
 """
-    sc_run_adaptive!(s, ap, new_facts; steps, force_replan) -> NamedTuple
+    run_adaptive!(s, ap, new_facts; steps, force_replan) -> NamedTuple
 
 Execute one adaptive planning cycle:
   1. Load `new_facts` into `s`
@@ -130,7 +130,7 @@ Execute one adaptive planning cycle:
 
 Returns `(steps=N, replanned=Bool, plan_version=Int)`.
 """
-function sc_run_adaptive!(s             :: Space,
+function run_adaptive!(s             :: Space,
                           ap            :: AdaptivePlan,
                           new_facts     :: AbstractString = "";
                           steps         :: Int  = typemax(Int),
@@ -178,6 +178,6 @@ function update_stats!(is::IncrementalStats, s::Space) :: IncrementalStats
 end
 
 export AdaptivePlan, should_replan, replan!
-export sc_run_adaptive!
+export run_adaptive!
 export update_stats!
 export MAX_PLAN_AGE, REPLAN_DRIFT

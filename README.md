@@ -26,11 +26,11 @@ s = new_space()
 space_add_all_sexpr!(s, "(edge 0 1) (edge 1 2) (edge 2 3)")
 
 # Plan + execute: stats → join-order → execute
-result = sc_run!(s, raw"(exec 0 (, (edge $x $y) (edge $y $z)) (, (path $x $z)))")
+result = execute!(s, raw"(exec 0 (, (edge $x $y) (edge $y $z)) (, (path $x $z)))")
 println(timing_report(result))
 
 # Explain the join plan chosen
-println(sc_explain(s, raw"(exec 0 (, (edge $x $y) (edge $y $z)) (, (path $x $z)))"))
+println(explain(s, raw"(exec 0 (, (edge $x $y) (edge $y $z)) (, (path $x $z)))"))
 
 # Approximate supercompilation with error budget
 result2 = run_approx_pipeline(s, raw"(exec 0 (, (edge $x $y) (edge $y $z)) (, (path $x $z)))";
@@ -47,7 +47,7 @@ r = define_factor_rule(
 ### Development REPL (warm — no cold-start, Revise-enabled)
 
 ```bash
-julia --project=. -i tools/sc_repl.jl
+julia --project=. -i tools/repl.jl
 ```
 ```julia
 t()                   # run all 580+ tests without restarting
@@ -77,9 +77,9 @@ src/
                  KBSaturation.jl       — Algorithm 11 (IncrementalSaturation)
                  EvoSpecializer.jl     — Algorithms 12+13+5+7
   codegen/       MM2Compiler.jl        — Algorithm 14 (BisimulationProof + MM2)
-  integration/   SCPipeline.jl         — sc_run! end-to-end pipeline
+  integration/   SCPipeline.jl         — execute! end-to-end pipeline
                  Profiler.jl           — baseline vs planned speedup
-                 Explainer.jl          — sc_explain + sc_dot + sc_diff
+                 Explainer.jl          — explain + to_dot + diff_programs
                  AdaptivePlanner.jl    — Algorithm 5 drift-based replanning
   approx/        PBoxAlgebra.jl        — Doc 2 §2: AddPBox + Fréchet + theorems
                  UncertainQuery.jl     — Doc 2 §3: cost model + ApproximateSplit
@@ -190,11 +190,11 @@ test/
 ### Pipeline (Doc 1 integration layer)
 
 ```julia
-sc_run!(s, program; opts)           # stats → plan → execute → SCResult
-sc_run(facts, program; steps)       # fresh space + run
-sc_explain(s, program)              # join order + cardinalities + variable flow
-sc_dot(program)                     # Graphviz DOT source
-sc_profile(facts, program; steps)   # baseline vs planned speedup
+execute!(s, program; opts)           # stats → plan → execute → SCResult
+execute(facts, program; steps)       # fresh space + run
+explain(s, program)              # join order + cardinalities + variable flow
+to_dot(program)                     # Graphviz DOT source
+profile(facts, program; steps)   # baseline vs planned speedup
 speedup_report(profile)             # formatted table
 ap = AdaptivePlan(s, program)
 sc_run_adaptive!(s, ap; steps)      # auto-replan on cardinality drift
@@ -204,8 +204,8 @@ sc_run_adaptive!(s, ap; steps)      # auto-replan on cardinality drift
 
 ```julia
 collect_stats(s; sample_frac)       # MORKStatistics (Algorithms 2+3)
-sc_plan_static(program)             # static source reordering
-sc_plan_program(s, program)         # dynamic (uses btm prefix counts)
+plan_static(program)             # static source reordering
+plan_program(s, program)         # dynamic (uses btm prefix counts)
 plan_query(sources, stats)          # Algorithm 6: sources + EffectBarriers
 ```
 
@@ -271,5 +271,5 @@ julia --project=. -e '
 
 ## What's Next
 
-1. **Benchmark validation** — run `sc_profile` on canonical Rule-of-64 cases (odd_even_sort, counter_machine, transitive_detect) and measure actual speedup from join-order optimization
+1. **Benchmark validation** — run `profile` on canonical Rule-of-64 cases (odd_even_sort, counter_machine, transitive_detect) and measure actual speedup from join-order optimization
 2. **MORK integration** — wire `BoundedSplit` + nested-loop join into `space_metta_calculus!` to replace `ProductZipper` for multi-source patterns

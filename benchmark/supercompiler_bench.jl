@@ -20,7 +20,7 @@ using BenchmarkTools
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 function measure_planning(program::String, label::String)
-    t_static  = @elapsed for _ in 1:1000; sc_plan_static(program); end
+    t_static  = @elapsed for _ in 1:1000; plan_static(program); end
     println("  [static]  $label: $(round(t_static*1000/1000, sigdigits=3)) ms/plan")
 end
 
@@ -34,7 +34,7 @@ function bench_execution(facts::String, program::String, steps::Int, label::Stri
     end
 
     # Planned: facts + reordered program (static planning)
-    prog_planned = sc_plan_static(program)
+    prog_planned = plan_static(program)
     t_plan = @elapsed begin
         s2 = new_space()
         space_add_all_sexpr!(s2, facts)
@@ -48,7 +48,7 @@ function bench_execution(facts::String, program::String, steps::Int, label::Stri
             "speedup: $(round(speedup, sigdigits=3))×")
 
     # Report
-    report = sc_plan_report(begin s3=new_space(); space_add_all_sexpr!(s3, facts); s3 end, program)
+    report = plan_report(begin s3=new_space(); space_add_all_sexpr!(s3, facts); s3 end, program)
     isempty(strip(report)) || print(report)
 end
 
@@ -95,10 +95,10 @@ function show_plan_report()
     println("\n== Join plan report: odd-even sort phase rule ==")
     s = new_space()
     space_add_all_sexpr!(s, ODD_EVEN_FACTS)
-    println(sc_plan_report(s, ODD_EVEN_PROG))
+    println(plan_report(s, ODD_EVEN_PROG))
 
     println("== Statically planned program: ==")
-    planned = sc_plan_static(ODD_EVEN_PROG)
+    planned = plan_static(ODD_EVEN_PROG)
     println(planned)
 end
 

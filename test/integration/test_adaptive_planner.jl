@@ -39,12 +39,12 @@ end
     @test ap.calls_since_plan == 0
 end
 
-@testset "AdaptivePlanner — sc_run_adaptive! executes" begin
+@testset "AdaptivePlanner — run_adaptive! executes" begin
     s  = new_space()
     space_add_all_sexpr!(s, "(foo 1)")
     prog = raw"(exec 0 (, (foo $x)) (, (bar $x)))"
     ap   = AdaptivePlan(s, prog)
-    res  = sc_run_adaptive!(s, ap; steps=1)
+    res  = run_adaptive!(s, ap; steps=1)
     @test res.plan_version >= 1
     @test space_val_count(s) > 1   # some new atoms added
 end

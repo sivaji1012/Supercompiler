@@ -4,8 +4,8 @@ SCPipeline — end-to-end supercompiler pipeline.
 Closes the loop from spec §10.4 (Production Hardening):
   stats → plan → (optional KB saturation) → compile → execute
 
-A single `sc_run!` call replaces the manual sequence of:
-  sc_collect_stats → sc_plan_program → space_add_all_sexpr! → space_metta_calculus!
+A single `execute!` call replaces the manual sequence of:
+  collect_stats → plan_program → space_add_all_sexpr! → space_metta_calculus!
 
 and adds bisimulation obligation recording, timing, and replanning support.
 
@@ -73,7 +73,7 @@ end
 # ── Main pipeline entry point ─────────────────────────────────────────────────
 
 """
-    sc_run!(s::Space, program::AbstractString; opts=SC_DEFAULTS) -> SCResult
+    execute!(s::Space, program::AbstractString; opts=SC_DEFAULTS) -> SCResult
 
 Run the full supercompiler pipeline on `program`, adding the result to `s`
 and executing up to `opts.max_steps` metta_calculus! steps.
@@ -81,7 +81,7 @@ and executing up to `opts.max_steps` metta_calculus! steps.
 `program` should contain the exec/rule atoms NOT yet loaded into `s`.
 Background facts should already be in `s` before calling.
 """
-function sc_run!(s       :: Space,
+function execute!(s       :: Space,
                  program :: AbstractString;
                  opts    :: SCOptions = SC_DEFAULTS) :: SCResult
 
@@ -144,12 +144,12 @@ function sc_run!(s       :: Space,
 end
 
 """
-    sc_run(facts::AbstractString, program::AbstractString; opts, steps) -> Tuple{Space, SCResult}
+    execute(facts::AbstractString, program::AbstractString; opts, steps) -> Tuple{Space, SCResult}
 
 Convenience wrapper: build a fresh space from `facts`, run the pipeline,
 return (space, result).
 """
-function sc_run(facts   :: AbstractString,
+function execute(facts   :: AbstractString,
                 program :: AbstractString;
                 opts    :: SCOptions = SC_DEFAULTS,
                 steps   :: Int = typemax(Int)) :: Tuple{Space, SCResult}
@@ -157,7 +157,7 @@ function sc_run(facts   :: AbstractString,
     space_add_all_sexpr!(s, facts)
     opts2 = SCOptions(opts.collect_stats, opts.plan_join_order, opts.saturate_kb,
                       opts.use_mm2_compiler, steps, opts.stats_sample_frac, opts.split_budget)
-    result = sc_run!(s, program; opts=opts2)
+    result = execute!(s, program; opts=opts2)
     (s, result)
 end
 
@@ -214,5 +214,5 @@ function timing_report(r::SCResult) :: String
 end
 
 export SCOptions, SC_DEFAULTS, SCResult
-export sc_run!, sc_run
+export execute!, execute
 export timing_report
