@@ -232,21 +232,28 @@ MCoreRef(def_id::Symbol) = MCoreRef(def_id, EffectSet())
     PBox
 
 Probability box: tracks uncertainty in a computed value.
-Minimal representation for Phase 1; full p-box algebra in future PBoxAlgebra.jl.
 
-Fields mirror the spec's `PBox` struct:
-  intervals     — disjoint [lo, hi] intervals
-  probabilities — P(x in intervals[i])
-  confidence    — total probability mass tracked
+All 4 fields from §2.2 of the Approximate Supercompilation spec:
+  intervals       — disjoint [lo, hi] intervals
+  probabilities   — P(x in intervals[i])
+  confidence      — total probability mass tracked
+  correlation_sig — BitVector: shared bits with another PBox → statistically
+                    dependent → use Fréchet bounds instead of independence.
+                    Prevents overconfidence when combining related evidence.
+
+Full algebra (AddPBox, MulPBox, WidenPBox, Fréchet bounds) in approx/PBoxAlgebra.jl.
 """
 struct PBox
-    intervals     :: Vector{Tuple{Float64, Float64}}
-    probabilities :: Vector{Float64}
-    confidence    :: Float64
+    intervals       :: Vector{Tuple{Float64, Float64}}
+    probabilities   :: Vector{Float64}
+    confidence      :: Float64
+    correlation_sig :: BitVector
 end
 PBox(lo::Float64, hi::Float64, p::Float64=1.0) =
-    PBox([(lo, hi)], [p], p)
-PBox(v::Float64) = PBox(v, v, 1.0)   # point estimate
+    PBox([(lo, hi)], [p], p, BitVector())
+PBox(v::Float64) = PBox(v, v, 1.0, BitVector())
+PBox(intervals::Vector{Tuple{Float64,Float64}}, probs::Vector{Float64}, conf::Float64) =
+    PBox(intervals, probs, conf, BitVector())
 
 """
     UncertainNode(base, value_pbox, cost_pbox, error_bound)

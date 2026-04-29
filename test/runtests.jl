@@ -34,6 +34,13 @@ using MorkSupercompiler
     include("integration/test_explainer.jl")
     include("integration/test_adaptive_planner.jl")
 
+    # ── Approximate Supercompilation (Doc 2) ──────────────────────────────────
+    include("approx/test_pbox_algebra.jl")
+    include("approx/test_uncertain_query.jl")
+    include("approx/test_uncertain_inference.jl")
+    include("approx/test_approx_moses.jl")
+    include("approx/test_approx_pipeline.jl")
+
 end
 
 println("All tests passed ✓")

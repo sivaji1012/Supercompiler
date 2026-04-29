@@ -68,6 +68,13 @@ include("integration/Profiler.jl")
 include("integration/Explainer.jl")
 include("integration/AdaptivePlanner.jl")
 
+# Layer 8 — Approximate Supercompilation (Doc 2, approx spec)
+include("approx/PBoxAlgebra.jl")
+include("approx/UncertainQuery.jl")
+include("approx/UncertainInference.jl")
+include("approx/ApproxMOSES.jl")
+include("approx/ApproxPipeline.jl")
+
 # ── High-level public API ─────────────────────────────────────────────────────
 
 """
@@ -194,6 +201,29 @@ export ProfilePhase, SCProfile, sc_profile, speedup_report
 export sc_explain, sc_dot, sc_diff
 export AdaptivePlan, should_replan, replan!, sc_run_adaptive!, update_stats!
 export MAX_PLAN_AGE, REPLAN_DRIFT
+# Approx Layer (Doc 2)
+export pbox_exact, pbox_point, pbox_interval, pbox_empty
+export width, max_width, overlap, are_dependent, mark_dependent
+export add_pbox, mul_pbox, widen_pbox, merge_overlapping, sample_from_pbox
+export error_composition_bound, frechet_width_bound, hoeffding_bound, hoeffding_epsilon
+export CostWeights, safety_critical, exploratory, balanced, total_cost
+export EstimateCardinalityPBox, estimate_cardinality_pbox
+export ApproxBranch, ApproximateSplitResult, approximate_split
+export ApproxJoinNode, plan_join_order_approx
+export ProofTree, UncertainFact, certain_fact
+export conjunction_and, disjunction_or
+export structural_similarity, match_with_uncertainty, NO_MATCH
+export apply_rule, convergence_width_bound
+export InferenceContext, step_deeper, derive_fact
+export tournament_with_pbox, MONTE_CARLO_TRIALS, CONVERGENCE_THETA
+export offspring_fitness_pbox
+export population_converged, convergence_report, rank_population
+export ErrorLevel, EXACT, BOUNDED, STATISTICAL
+export ApproximatePathSig, is_cacheable, approx_subsumes
+export SimpleBloomFilter, bloom_add!, bloom_check, bloom_false_positive_rate
+export ApproxIndex, approx_index_insert!, approx_index_lookup
+export register_approx_primitives!
+export ApproxPhase, ApproxPipelineResult, run_approx_pipeline
 # CanonicalKeys (Phase 2)
 export CompactShape, shape_subsumes, extract_shape
 export FixedArgMask, CanonicalKBSig, CanonicalEffectSig, CanonicalPathSig
