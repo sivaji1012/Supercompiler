@@ -1,0 +1,7 @@
+#!/bin/bash
+# Block hardcoded local paths in committed files
+if git diff --cached --name-only | xargs grep -l "/home/[a-z]" 2>/dev/null | grep -v ".githooks/pre-commit"; then
+  echo "ERROR: Committed files contain hardcoded local paths (/home/...)"
+  echo "Remove them before committing."
+  exit 1
+fi
