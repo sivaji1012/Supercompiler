@@ -38,8 +38,10 @@ using MorkSupercompiler
     # ── Multi-Geometry Framework (Doc 3) ─────────────────────────────────────
     include("mgfw/test_mgfw.jl")
 
-    # ── Multi-Space (Stage 1) ────────────────────────────────────────────────
+    # ── Multi-Space (Stage 1 + Stage 2) ─────────────────────────────────────
     include("multispace/test_multispace.jl")
+    include("multispace/test_mpi_transport.jl")
+    include("multispace/test_sharded_space.jl")
 
     # ── Approximate Supercompilation (Doc 2) ──────────────────────────────────
     include("approx/test_pbox_algebra.jl")

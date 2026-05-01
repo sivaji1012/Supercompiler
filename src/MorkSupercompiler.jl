@@ -83,6 +83,7 @@ include("mgfw/SemanticObjects.jl")
 # Layer 10 — Multi-Space (optional, zero overhead when disabled)
 include("multispace/MultiSpace.jl")
 include("multispace/MPITransport.jl")   # Stage 2: MPI peer-to-peer transport
+include("multispace/ShardedSpace.jl")   # Topology 2: sharded single logical space
 include("multispace/Traverse.jl")
 include("multispace/MM2Commands.jl")
 include("multispace/Persistence.jl")
@@ -287,6 +288,11 @@ export save_space!, load_space!, checkpoint_all!
 export mpi_init!, mpi_finalize!
 export mpi_rank, mpi_nranks, mpi_active
 export mpi_send_traverse!, mpi_poll_traverse!, mpi_broadcast_traverse!, mpi_barrier!
+export mpi_allreduce_sum, mpi_allgatherv_strings, mpi_bcast_bytes!
 export TRAVERSE_TAG, RESULT_TAG
+# ShardedSpace — Topology 2
+export ShardedSpace, new_sharded_space
+export sharded_add!, sharded_flush!, sharded_query, sharded_val_count
+export shard_owner, SHARD_ATOM_TAG
 
 end # module

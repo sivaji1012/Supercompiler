@@ -154,8 +154,87 @@ function mpi_barrier!() :: Nothing
     nothing
 end
 
+# ── Collective operations (Topology 2 — sharded space) ───────────────────────
+
+"""
+    mpi_allreduce_sum(local_val::Int64) → Int64
+
+Sum an integer across all peers. Returns the global sum on every rank.
+Used by sharded_val_count to total atoms across all shards.
+Falls back to local_val when MPI not active (single-node).
+"""
+function mpi_allreduce_sum(local_val::Int64) :: Int64
+    mpi_active() || return local_val
+    buf = Ref(local_val)
+    MPI.Allreduce!(buf, MPI.SUM, _MPI_COMM[])
+    buf[]
+end
+
+"""
+    mpi_allgatherv_strings(local_strs::Vector{String}) → Vector{String}
+
+Gather variable-length strings from all peers onto every rank.
+Used by sharded_query to collect atom results from all shards.
+
+Protocol:
+  1. Each rank sends its local string count (Allgather).
+  2. Each rank serialises its strings as newline-delimited bytes.
+  3. Allgatherv collects variable-length byte buffers.
+  4. Each rank deserialises the gathered bytes into strings.
+
+Falls back to local_strs when MPI not active.
+"""
+function mpi_allgatherv_strings(local_strs::Vector{String}) :: Vector{String}
+    mpi_active() || return local_strs
+
+    # Serialise: join with '\n', encode as UInt8
+    local_bytes = Vector{UInt8}(join(local_strs, "\n"))
+    local_len   = Int32(length(local_bytes))
+
+    # Step 1: gather all lengths
+    all_lens = MPI.Allgather(local_len, _MPI_COMM[])   # Vector{Int32}, length=nranks
+
+    # Step 2: gather variable-length payloads
+    total_bytes = Int(sum(all_lens))
+    recv_buf    = Vector{UInt8}(undef, total_bytes)
+    counts      = Vector{Int32}(all_lens)
+    displs      = Int32[0; cumsum(counts)[1:end-1]]
+    MPI.Allgatherv!(local_bytes, MPI.VBuffer(recv_buf, counts, displs), _MPI_COMM[])
+
+    # Step 3: deserialise
+    result = String[]
+    offset = 1
+    for len in all_lens
+        chunk = String(recv_buf[offset:offset+len-1])
+        for s in split(chunk, "\n")
+            isempty(s) || push!(result, s)
+        end
+        offset += len
+    end
+    result
+end
+
+"""
+    mpi_bcast_bytes!(buf::Vector{UInt8}, root::Int32=LOCAL_PEER) → Vector{UInt8}
+
+Broadcast a byte buffer from `root` rank to all peers.
+Used by sharded_query to broadcast the query pattern from the initiating rank.
+"""
+function mpi_bcast_bytes!(buf::Vector{UInt8}, root::Int32=LOCAL_PEER) :: Vector{UInt8}
+    mpi_active() || return buf
+    # First broadcast the length so non-root ranks can allocate
+    len_buf = Ref(Int32(length(buf)))
+    MPI.Bcast!(len_buf, _MPI_COMM[]; root=Int(root))
+    if mpi_rank() != root
+        resize!(buf, len_buf[])
+    end
+    MPI.Bcast!(buf, _MPI_COMM[]; root=Int(root))
+    buf
+end
+
 export mpi_init!, mpi_finalize!
 export mpi_rank, mpi_nranks, mpi_active
 export mpi_send_traverse!, mpi_poll_traverse!, mpi_broadcast_traverse!
 export mpi_barrier!
+export mpi_allreduce_sum, mpi_allgatherv_strings, mpi_bcast_bytes!
 export TRAVERSE_TAG, RESULT_TAG
