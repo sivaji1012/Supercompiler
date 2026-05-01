@@ -29,19 +29,37 @@ and all operations fall through to single-flat-space semantics with zero overhea
 const ENABLE_MULTI_SPACE = Ref{Bool}(false)
 
 """
-    enable_multi_space!(flag::Bool)
+    enable_multi_space!(flag::Bool; use_mpi::Bool=false) → Nothing
 
 Enable or disable the multi-space layer at runtime.
-When false (default): zero overhead, exactly current single-space behaviour.
-When true: SpaceRegistry is active, MM2 commands are intercepted.
+
+  flag=false (default): zero overhead, exactly current single-space behaviour.
+  flag=true:  SpaceRegistry active, MM2 commands intercepted.
+  use_mpi=true: initialise MPI transport (Stage 2 HPC peer-to-peer).
+               Calls mpi_init!() which sets registry rank/nranks from MPI.
+               Safe to call multiple times (idempotent).
+
+Single-node:   enable_multi_space!(true)              → Stage 1 registry only
+Multi-node:    enable_multi_space!(true; use_mpi=true) → Stage 2 MPI peers
 """
-function enable_multi_space!(flag::Bool)
+function enable_multi_space!(flag::Bool; use_mpi::Bool=false)
     ENABLE_MULTI_SPACE[] = flag
-    flag && _ensure_registry!()
+    if flag
+        _ensure_registry!()
+        use_mpi && mpi_init!()
+    end
     nothing
 end
 
 # ── NamedSpaceID ───────────────────────────────────────────────────────────────────
+
+"""
+    LOCAL_PEER
+
+Sentinel peer_id meaning "this node" — MPI rank 0 on a single-node run,
+or the local rank on a multi-node run.  Used as default in NamedSpaceID.
+"""
+const LOCAL_PEER = Int32(0)
 
 """
     NamedSpaceID
@@ -51,23 +69,28 @@ Content-addressable space identifier.
   name    :: String  — user-defined name (e.g. "my-knowledge-base", "my-app")
   cid     :: UInt64  — content hash of the space's PathMap root (Merkle-ready)
                        Zero for a freshly created empty space.
+  peer_id :: Int32   — MPI rank of the peer that owns this space.
+                       LOCAL_PEER (0) = local to this process.
+                       No master — every peer is equal (SPMD model).
 
-Stage 1: `name` is the primary key.  Single-node, all spaces local.
-Stage 2 (HPC): extend with `peer_id :: Int` (Distributed.jl process ID of the
-               peer node that owns this space).  No master — every node is equal.
-               Routing via space_traverse! traversal probability (threshold=0.3).
+Stage 1: `name` is the primary key.  peer_id = LOCAL_PEER always.
+Stage 2 (HPC): peer_id = MPI rank.  Routing via space_traverse! probability gate.
 Stage 3 (Web3): `cid` becomes the primary key (IPFS/content-addressed).
 """
 struct NamedSpaceID
-    name :: String
-    cid  :: UInt64
+    name    :: String
+    cid     :: UInt64
+    peer_id :: Int32
 end
 
-NamedSpaceID(name::AbstractString) = NamedSpaceID(String(name), UInt64(0))
+NamedSpaceID(name::AbstractString) =
+    NamedSpaceID(String(name), UInt64(0), LOCAL_PEER)
 
-Base.:(==)(a::NamedSpaceID, b::NamedSpaceID) = a.name == b.name
-Base.hash(s::NamedSpaceID, h::UInt)     = hash(s.name, h)
-Base.show(io::IO, s::NamedSpaceID)      = print(io, "NamedSpaceID(\"$(s.name)\")")
+# Equality and hashing by (name, peer_id) — two peers can have same-named spaces
+Base.:(==)(a::NamedSpaceID, b::NamedSpaceID) = a.name == b.name && a.peer_id == b.peer_id
+Base.hash(s::NamedSpaceID, h::UInt)     = hash(s.peer_id, hash(s.name, h))
+Base.show(io::IO, s::NamedSpaceID)      =
+    print(io, "NamedSpaceID(\"$(s.name)\", peer=$(s.peer_id))")
 
 # ── SpaceRegistry ─────────────────────────────────────────────────────────────
 
@@ -76,21 +99,29 @@ Base.show(io::IO, s::NamedSpaceID)      = print(io, "NamedSpaceID(\"$(s.name)\")
 
 Manages a collection of named MORK spaces with role metadata.
 
-  spaces  :: Dict{NamedSpaceID, Space}   — all registered spaces
-  roles   :: Dict{NamedSpaceID, Symbol}  — :common or :app (user-assignable)
+  spaces     :: Dict{NamedSpaceID, Space}  — local spaces owned by this peer
+  roles      :: Dict{NamedSpaceID, Symbol} — :common or :app (user-assignable)
+  disk_paths :: Dict{NamedSpaceID, String} — optional .act file backing
+  rank       :: Int32  — this peer's MPI rank (LOCAL_PEER=0 on single-node)
+  nranks     :: Int32  — total number of peers in the MPI communicator (1 = single-node)
 
 No hardcoded topology. Users define their own via MM2 commands or the Julia API.
+SPMD: every peer runs the same code, differentiated by rank.
 """
 mutable struct SpaceRegistry
-    spaces        :: Dict{NamedSpaceID, Space}
-    roles         :: Dict{NamedSpaceID, Symbol}
-    disk_paths    :: Dict{NamedSpaceID, String}   # optional .act file backing
+    spaces     :: Dict{NamedSpaceID, Space}
+    roles      :: Dict{NamedSpaceID, Symbol}
+    disk_paths :: Dict{NamedSpaceID, String}
+    rank       :: Int32   # this peer's MPI rank
+    nranks     :: Int32   # total peers (1 = single-node, no MPI)
 end
 
 SpaceRegistry() = SpaceRegistry(
     Dict{NamedSpaceID, Space}(),
     Dict{NamedSpaceID, Symbol}(),
-    Dict{NamedSpaceID, String}()
+    Dict{NamedSpaceID, String}(),
+    LOCAL_PEER,
+    Int32(1)
 )
 
 # ── Global registry singleton ─────────────────────────────────────────────────
@@ -184,6 +215,6 @@ function compute_cid(s::Space) :: UInt64
 end
 
 export ENABLE_MULTI_SPACE, enable_multi_space!
-export NamedSpaceID, SpaceRegistry
+export LOCAL_PEER, NamedSpaceID, SpaceRegistry
 export get_registry, new_space!, get_space, common_space, list_spaces
 export compute_cid

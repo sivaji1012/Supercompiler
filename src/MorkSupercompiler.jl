@@ -82,6 +82,7 @@ include("mgfw/SemanticObjects.jl")
 
 # Layer 10 — Multi-Space (optional, zero overhead when disabled)
 include("multispace/MultiSpace.jl")
+include("multispace/MPITransport.jl")   # Stage 2: MPI peer-to-peer transport
 include("multispace/Traverse.jl")
 include("multispace/MM2Commands.jl")
 include("multispace/Persistence.jl")
@@ -277,10 +278,15 @@ export affinity_analysis, select_backend, CompilationResult, mg_compile, mg_run!
 export build_geodesic_bgc_composite
 # Multi-Space (Layer 10)
 export ENABLE_MULTI_SPACE, enable_multi_space!
-export NamedSpaceID, SpaceRegistry
+export LOCAL_PEER, NamedSpaceID, SpaceRegistry
 export get_registry, new_space!, get_space, common_space, list_spaces, compute_cid
-export TRAVERSAL_THRESHOLD, TraversalResult, space_traverse!
+export TRAVERSAL_THRESHOLD, TraversalResult, space_traverse!, process_mpi_traversals!
 export process_multispace_commands!
 export save_space!, load_space!, checkpoint_all!
+# MPI transport (Stage 2)
+export mpi_init!, mpi_finalize!
+export mpi_rank, mpi_nranks, mpi_active
+export mpi_send_traverse!, mpi_poll_traverse!, mpi_broadcast_traverse!, mpi_barrier!
+export TRAVERSE_TAG, RESULT_TAG
 
 end # module
