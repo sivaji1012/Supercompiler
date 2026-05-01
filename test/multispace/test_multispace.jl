@@ -51,9 +51,15 @@ end
     @test_throws ErrorException new_space!(reg, "alpha", :app)
 end
 
-@testset "SpaceRegistry — invalid role throws" begin
+@testset "SpaceRegistry — any role is valid (architect-defined)" begin
     reg = SpaceRegistry()
-    @test_throws ErrorException new_space!(reg, "bad", :unknown)
+    # Any symbol is a valid role — architect designs their own topology
+    s1 = new_space!(reg, "pln-space",       :pln)
+    s2 = new_space!(reg, "ecan-space",      :ecan)
+    s3 = new_space!(reg, "genomics-space",  :genomics)
+    @test reg.roles[NamedSpaceID("pln-space")]      == :pln
+    @test reg.roles[NamedSpaceID("ecan-space")]     == :ecan
+    @test reg.roles[NamedSpaceID("genomics-space")] == :genomics
 end
 
 @testset "SpaceRegistry — list_spaces" begin

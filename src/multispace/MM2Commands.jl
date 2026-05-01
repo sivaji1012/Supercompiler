@@ -2,12 +2,18 @@
 MM2Commands — intercept and execute multi-space MM2 commands.
 
 Supported commands (all intercepted BEFORE space_metta_calculus!):
-  (new-space "name" :app)           — create a new app space
-  (new-space "name" :common)        — create a new common/shared space
-  (shared-space)                    — returns the designated common space
-  (save-space "name" "path.act")    — persist space to .act file
-  (load-space "name" "path.act")    — load/restore space from .act file
-  (list-spaces)                     — print all registered spaces
+  (new-space name)           — create space with default role :app
+  (new-space name role)      — create space with any user-defined role
+  (new-space name common)    — create shared space (ShardedSpace on MPI)
+  (shared-space)             — returns the designated :common space
+  (save-space name path.act) — persist space to .act file
+  (load-space name path.act) — load/restore space from .act file
+  (list-spaces)              — print all registered spaces
+
+Role is any user-defined symbol. Architects name their own topology freely.
+Only :common has special semantics (ShardedSpace when MPI active, plain
+Space on single-node). All other roles create a local Space.
+Examples: app, common, reasoning, perception, memory, ontology, pln, ecan
 
 When ENABLE_MULTI_SPACE[] = false, this module is a no-op.
 """
@@ -117,13 +123,13 @@ function _extract_string(node::SNode) :: String
 end
 
 function _extract_role(node::SNode) :: Symbol
-    node isa SAtom || error("expected app or common")
+    node isa SAtom || error("expected a role symbol (e.g. app, common, reasoning, pln)")
     name = (node::SAtom).name
-    # Accept "app", ":app", "common", ":common" (colon prefix is optional)
+    # Strip optional leading colon (":app" → "app", ":common" → "common")
     startswith(name, ":") && (name = name[2:end])
-    name == "app"    && return :app
-    name == "common" && return :common
-    error("unknown role \"$name\", expected app or common")
+    # Any symbol is valid — architect freely names their topology
+    # Only :common has special semantics (ShardedSpace when MPI active)
+    Symbol(name)
 end
 
 function _print_space_list(reg::SpaceRegistry)

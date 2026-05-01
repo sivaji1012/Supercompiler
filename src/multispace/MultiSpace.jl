@@ -106,11 +106,11 @@ Manages a collection of named MORK spaces with role metadata.
   rank           :: Int32  — this peer's MPI rank (LOCAL_PEER=0 on single-node)
   nranks         :: Int32  — total peers (1 = single-node, no MPI)
 
-Role semantics:
-  :app    — local Space owned exclusively by this peer (Topology 3 / Stage 1)
-  :common — ShardedSpace when MPI active: one logical space, atoms partitioned
-            across all peers by hash_mod, no full copy on any peer (Topology 2)
+Role semantics (architect-defined — any symbol is valid):
+  :common — ShardedSpace when MPI active (partitioned, no copies, Topology 2)
             Falls back to plain Space on single-node (zero overhead).
+  anything else (:app, :pln, :ecan, :genomics, :reasoning, ...) — local Space.
+  Roles are labels; architects design their own topology freely.
 
 SPMD: every peer runs the same code, differentiated by rank.
 """
@@ -164,7 +164,8 @@ Create and register a new MORK space with the given name and role.
 """
 function new_space!(reg::SpaceRegistry, name::AbstractString,
                     role::Symbol = :app)
-    role ∈ (:app, :common) || error("role must be :app or :common, got :$role")
+    # Any role is valid — architects define their own topology labels.
+    # :common is the only role with special backing-store semantics.
     id = NamedSpaceID(name)
     (haskey(reg.spaces, id) || haskey(reg.sharded_spaces, id)) &&
         error("space \"$name\" already exists")
@@ -210,7 +211,7 @@ function common_space(reg::SpaceRegistry)
         haskey(reg.sharded_spaces, id) && return reg.sharded_spaces[id]
         haskey(reg.spaces, id)         && return reg.spaces[id]
     end
-    error("No :common space registered. Create one with new_space!(reg, name, :common).")
+    error("No :common space registered. Use new_space!(reg, name, :common).")
 end
 
 """
