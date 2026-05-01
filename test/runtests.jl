@@ -38,6 +38,9 @@ using MorkSupercompiler
     # ── Multi-Geometry Framework (Doc 3) ─────────────────────────────────────
     include("mgfw/test_mgfw.jl")
 
+    # ── Multi-Space (Stage 1) ────────────────────────────────────────────────
+    include("multispace/test_multispace.jl")
+
     # ── Approximate Supercompilation (Doc 2) ──────────────────────────────────
     include("approx/test_pbox_algebra.jl")
     include("approx/test_uncertain_query.jl")

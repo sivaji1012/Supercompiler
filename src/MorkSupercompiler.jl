@@ -79,6 +79,12 @@ include("approx/ApproxPipeline.jl")
 
 # Layer 9 — Multi-Geometry Framework (Doc 3, mg_framework_spec)
 include("mgfw/SemanticObjects.jl")
+
+# Layer 10 — Multi-Space (optional, zero overhead when disabled)
+include("multispace/MultiSpace.jl")
+include("multispace/Traverse.jl")
+include("multispace/MM2Commands.jl")
+include("multispace/Persistence.jl")
 include("mgfw/GeometryTemplate.jl")
 include("mgfw/SchemaRegistry.jl")
 include("mgfw/FactorGeometry.jl")
@@ -107,6 +113,17 @@ plan_program(s::Space, program::AbstractString) :: String =
     plan_program_dynamic(program, s.btm)
 
 """
+    _preprocess_program(program) → String
+
+When multi-space is enabled, strip and execute multi-space MM2 commands.
+Zero overhead when ENABLE_MULTI_SPACE[] = false.
+"""
+@inline function _preprocess_program(program::AbstractString) :: String
+    ENABLE_MULTI_SPACE[] || return String(program)
+    process_multispace_commands!(get_registry(), program)
+end
+
+"""
     plan!(s::Space, program::AbstractString, max_steps::Int=typemax(Int)) -> Int
 
 Plan, decompose, add, and execute in one call:
@@ -119,6 +136,7 @@ Plan, decompose, add, and execute in one call:
 """
 function plan!(s::Space, program::AbstractString,
                max_steps::Int=typemax(Int)) :: Int
+    program  = _preprocess_program(program)
     program′ = plan_program(s, program)
     program′ = decompose_program(program′)
     space_add_all_sexpr!(s, program′)
@@ -136,9 +154,11 @@ Runs the full supercompiler pipeline: stats → plan → decompose → execute �
 This is the primary entry point from the MM2 spec §10.5.
 Use instead of calling `space_metta_calculus!` directly.
 """
-run!(s::Space, program::AbstractString,
-     max_steps::Int=typemax(Int)) :: SCResult =
+function run!(s::Space, program::AbstractString,
+              max_steps::Int=typemax(Int)) :: SCResult
+    program = _preprocess_program(program)
     execute!(s, program; opts=SCOptions(max_steps=max_steps))
+end
 
 # Re-export the most useful lower-level symbols
 export plan_static, plan_program, plan!, plan_report
@@ -255,5 +275,12 @@ export AffinityLevel, HIGH, MEDIUM, LOW, NONE
 export BackendProfile, BackendChoice
 export affinity_analysis, select_backend, CompilationResult, mg_compile, mg_run!
 export build_geodesic_bgc_composite
+# Multi-Space (Layer 10)
+export ENABLE_MULTI_SPACE, enable_multi_space!
+export NamedSpaceID, SpaceRegistry
+export get_registry, new_space!, get_space, common_space, list_spaces, compute_cid
+export TRAVERSAL_THRESHOLD, TraversalResult, space_traverse!
+export process_multispace_commands!
+export save_space!, load_space!, checkpoint_all!
 
 end # module
