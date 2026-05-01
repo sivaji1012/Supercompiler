@@ -13,7 +13,8 @@ Supported commands (all intercepted BEFORE space_metta_calculus!):
 Role is any user-defined symbol. Architects name their own topology freely.
 Only :common has special semantics (ShardedSpace when MPI active, plain
 Space on single-node). All other roles create a local Space.
-Examples: app, common, reasoning, perception, memory, ontology, pln, ecan
+Examples: common, genomics, robotics, games, drug-discovery, mathematics
+Cognitive algorithms (PLN/ECAN/MOSES rules) are atoms IN :common, not separate spaces.
 
 When ENABLE_MULTI_SPACE[] = false, this module is a no-op.
 """
@@ -123,7 +124,7 @@ function _extract_string(node::SNode) :: String
 end
 
 function _extract_role(node::SNode) :: Symbol
-    node isa SAtom || error("expected a role symbol (e.g. app, common, reasoning, pln)")
+    node isa SAtom || error("expected a role symbol (e.g. common, genomics, robotics, games)")
     name = (node::SAtom).name
     # Strip optional leading colon (":app" → "app", ":common" → "common")
     startswith(name, ":") && (name = name[2:end])

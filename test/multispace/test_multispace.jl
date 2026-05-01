@@ -53,13 +53,18 @@ end
 
 @testset "SpaceRegistry — any role is valid (architect-defined)" begin
     reg = SpaceRegistry()
-    # Any symbol is a valid role — architect designs their own topology
-    s1 = new_space!(reg, "pln-space",       :pln)
-    s2 = new_space!(reg, "ecan-space",      :ecan)
-    s3 = new_space!(reg, "genomics-space",  :genomics)
-    @test reg.roles[NamedSpaceID("pln-space")]      == :pln
-    @test reg.roles[NamedSpaceID("ecan-space")]     == :ecan
-    @test reg.roles[NamedSpaceID("genomics-space")] == :genomics
+    # Cognitive algorithms (PLN, ECAN, MOSES) are atoms IN :common, not separate spaces.
+    # Domain data lives in domain-named spaces.
+    new_space!(reg, "shared-kb",      :common)       # PLN/ECAN rules + ontology live here
+    new_space!(reg, "genomics-data",  :genomics)     # domain: bioinformatics facts
+    new_space!(reg, "robotics-data",  :robotics)     # domain: sensor/actuator data
+    new_space!(reg, "games-data",     :games)        # domain: game states/moves
+    new_space!(reg, "drug-discovery", :drug_discovery)
+    @test reg.roles[NamedSpaceID("shared-kb")]      == :common
+    @test reg.roles[NamedSpaceID("genomics-data")]  == :genomics
+    @test reg.roles[NamedSpaceID("robotics-data")]  == :robotics
+    @test reg.roles[NamedSpaceID("games-data")]     == :games
+    @test common_space(reg) isa Space
 end
 
 @testset "SpaceRegistry — list_spaces" begin

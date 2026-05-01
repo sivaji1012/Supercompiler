@@ -109,8 +109,9 @@ Manages a collection of named MORK spaces with role metadata.
 Role semantics (architect-defined — any symbol is valid):
   :common — ShardedSpace when MPI active (partitioned, no copies, Topology 2)
             Falls back to plain Space on single-node (zero overhead).
-  anything else (:app, :pln, :ecan, :genomics, :reasoning, ...) — local Space.
-  Roles are labels; architects design their own topology freely.
+  anything else (:genomics, :robotics, :games, :drug-discovery, ...) — local Space.
+  Cognitive algorithms (PLN, ECAN, MOSES) are atoms IN :common, not separate spaces.
+  Domain data lives in domain-named spaces. Roles are architect-defined labels.
 
 SPMD: every peer runs the same code, differentiated by rank.
 """
