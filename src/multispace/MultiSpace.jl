@@ -99,25 +99,33 @@ Base.show(io::IO, s::NamedSpaceID)      =
 
 Manages a collection of named MORK spaces with role metadata.
 
-  spaces     :: Dict{NamedSpaceID, Space}  — local spaces owned by this peer
-  roles      :: Dict{NamedSpaceID, Symbol} — :common or :app (user-assignable)
-  disk_paths :: Dict{NamedSpaceID, String} — optional .act file backing
-  rank       :: Int32  — this peer's MPI rank (LOCAL_PEER=0 on single-node)
-  nranks     :: Int32  — total number of peers in the MPI communicator (1 = single-node)
+  spaces         :: Dict{NamedSpaceID, Space}        — local :app spaces (this peer only)
+  sharded_spaces :: Dict{NamedSpaceID, ShardedSpace} — :common spaces (sharded, no copy)
+  roles          :: Dict{NamedSpaceID, Symbol}        — :common or :app
+  disk_paths     :: Dict{NamedSpaceID, String}        — optional .act file backing
+  rank           :: Int32  — this peer's MPI rank (LOCAL_PEER=0 on single-node)
+  nranks         :: Int32  — total peers (1 = single-node, no MPI)
 
-No hardcoded topology. Users define their own via MM2 commands or the Julia API.
+Role semantics:
+  :app    — local Space owned exclusively by this peer (Topology 3 / Stage 1)
+  :common — ShardedSpace when MPI active: one logical space, atoms partitioned
+            across all peers by hash_mod, no full copy on any peer (Topology 2)
+            Falls back to plain Space on single-node (zero overhead).
+
 SPMD: every peer runs the same code, differentiated by rank.
 """
 mutable struct SpaceRegistry
-    spaces     :: Dict{NamedSpaceID, Space}
-    roles      :: Dict{NamedSpaceID, Symbol}
-    disk_paths :: Dict{NamedSpaceID, String}
-    rank       :: Int32   # this peer's MPI rank
-    nranks     :: Int32   # total peers (1 = single-node, no MPI)
+    spaces         :: Dict{NamedSpaceID, Space}
+    sharded_spaces :: Dict{NamedSpaceID, Any}    # ShardedSpace (forward ref)
+    roles          :: Dict{NamedSpaceID, Symbol}
+    disk_paths     :: Dict{NamedSpaceID, String}
+    rank           :: Int32
+    nranks         :: Int32
 end
 
 SpaceRegistry() = SpaceRegistry(
     Dict{NamedSpaceID, Space}(),
+    Dict{NamedSpaceID, Any}(),
     Dict{NamedSpaceID, Symbol}(),
     Dict{NamedSpaceID, String}(),
     LOCAL_PEER,
@@ -146,43 +154,61 @@ end
 # ── Registry operations ───────────────────────────────────────────────────────
 
 """
-    new_space!(reg, name, role=:app) → Space
+    new_space!(reg, name, role=:app) → Union{Space, ShardedSpace}
 
-Create and register a new empty MORK space with the given name and role.
-Role must be :app or :common.
+Create and register a new MORK space with the given name and role.
+
+  :app    — always a local Space (private to this peer)
+  :common — ShardedSpace when MPI active (partitioned, no copies)
+            plain Space when single-node (zero overhead, same API via common_space)
 """
 function new_space!(reg::SpaceRegistry, name::AbstractString,
-                    role::Symbol = :app) :: Space
+                    role::Symbol = :app)
     role ∈ (:app, :common) || error("role must be :app or :common, got :$role")
-    id  = NamedSpaceID(name)
-    haskey(reg.spaces, id) && error("space \"$name\" already exists")
-    s   = new_space()
-    reg.spaces[id] = s
-    reg.roles[id]  = role
-    s
-end
-
-"""
-    get_space(reg, name) → Space
-
-Retrieve a registered space by name. Throws if not found.
-"""
-function get_space(reg::SpaceRegistry, name::AbstractString) :: Space
     id = NamedSpaceID(name)
-    get(reg.spaces, id) do
-        error("space \"$name\" not registered. Use new_space! first.")
+    (haskey(reg.spaces, id) || haskey(reg.sharded_spaces, id)) &&
+        error("space \"$name\" already exists")
+    reg.roles[id] = role
+
+    if role == :common && mpi_active()
+        # ShardedSpace: one logical space partitioned across all peers
+        # Each peer owns atoms where hash(atom_bytes) % nranks == this rank
+        # No full copy on any peer
+        ss = new_sharded_space(name)
+        reg.sharded_spaces[id] = ss
+        return ss
+    else
+        # Plain local Space (:app always, :common on single-node)
+        s = new_space()
+        reg.spaces[id] = s
+        return s
     end
 end
 
 """
-    common_space(reg) → Space
+    get_space(reg, name) → Union{Space, ShardedSpace}
 
-Return the first :common space in the registry.
-Throws if no common space has been designated.
+Retrieve a registered space by name. Returns Space or ShardedSpace.
 """
-function common_space(reg::SpaceRegistry) :: Space
+function get_space(reg::SpaceRegistry, name::AbstractString)
+    id = NamedSpaceID(name)
+    haskey(reg.spaces, id)         && return reg.spaces[id]
+    haskey(reg.sharded_spaces, id) && return reg.sharded_spaces[id]
+    error("space \"$name\" not registered. Use new_space! first.")
+end
+
+"""
+    common_space(reg) → Union{Space, ShardedSpace}
+
+Return the :common space.
+  Single-node: returns a plain Space (local, no MPI overhead).
+  Multi-node:  returns a ShardedSpace (partitioned across all peers, no copies).
+"""
+function common_space(reg::SpaceRegistry)
     for (id, role) in reg.roles
-        role == :common && return reg.spaces[id]
+        role == :common || continue
+        haskey(reg.sharded_spaces, id) && return reg.sharded_spaces[id]
+        haskey(reg.spaces, id)         && return reg.spaces[id]
     end
     error("No :common space registered. Create one with new_space!(reg, name, :common).")
 end
