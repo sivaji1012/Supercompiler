@@ -48,12 +48,14 @@ end
 
 Content-addressable space identifier.
 
-  name :: String    — user-defined name (e.g. "my-knowledge-base", "my-app")
-  cid  :: UInt64    — content hash of the space's PathMap root (Merkle-ready)
-                      Zero for a freshly created empty space.
+  name    :: String  — user-defined name (e.g. "my-knowledge-base", "my-app")
+  cid     :: UInt64  — content hash of the space's PathMap root (Merkle-ready)
+                       Zero for a freshly created empty space.
 
-Stage 1: `name` is the primary key.
-Stage 2 (HPC): extend with `worker_id :: Int` (Distributed.jl process ID).
+Stage 1: `name` is the primary key.  Single-node, all spaces local.
+Stage 2 (HPC): extend with `peer_id :: Int` (Distributed.jl process ID of the
+               peer node that owns this space).  No master — every node is equal.
+               Routing via space_traverse! traversal probability (threshold=0.3).
 Stage 3 (Web3): `cid` becomes the primary key (IPFS/content-addressed).
 """
 struct NamedSpaceID
