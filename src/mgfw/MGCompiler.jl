@@ -126,12 +126,13 @@ function backend_neutral_optimize(templates :: Vector{GeometryTemplate},
     valid = filter(is_valid_template, templates)
     isempty(valid) && return templates   # guard: don't drop everything
 
-    # Pass 2: cache contract ordering — content_hash > epoch > others
+    # Pass 2: cache contract ordering — content_hash > version_tuple > epoch > others
+    # CacheContract.key is Vector{Symbol}; check if strong cache key is declared
     _cache_rank(t::GeometryTemplate) :: Int = begin
-        cc = t.cache_contract.cache_key
-        cc == :content_hash ? 0 :
-        cc == :version_tuple ? 1 :
-        cc == :epoch         ? 2 : 3
+        keys = t.cache_contract.key   # Vector{Symbol}
+        :content_hash  ∈ keys ? 0 :
+        :version_tuple ∈ keys ? 1 :
+        :epoch         ∈ keys ? 2 : 3
     end
     sort!(valid; by=_cache_rank)
 
