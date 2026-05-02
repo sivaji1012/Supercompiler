@@ -80,13 +80,22 @@ include("approx/ApproxPipeline.jl")
 # Layer 9 — Multi-Geometry Framework (Doc 3, mg_framework_spec)
 include("mgfw/SemanticObjects.jl")
 
-# Layer 10 — Multi-Space (optional, zero overhead when disabled)
-include("multispace/MultiSpace.jl")
-include("multispace/MPITransport.jl")   # Stage 2: MPI peer-to-peer transport
-include("multispace/ShardedSpace.jl")   # Topology 2: sharded single logical space
-include("multispace/Traverse.jl")
-include("multispace/MM2Commands.jl")
-include("multispace/Persistence.jl")
+# Layer 10 — Multi-Space via HPC standalone package
+using HPC
+# Re-export all HPC symbols so existing MorkSupercompiler users see no change
+using HPC: ENABLE_MULTI_SPACE, enable_multi_space!
+using HPC: LOCAL_PEER, NamedSpaceID, SpaceRegistry
+using HPC: get_registry, new_space!, get_space, common_space, list_spaces, compute_cid
+using HPC: TRAVERSAL_THRESHOLD, TraversalResult, space_traverse!, process_mpi_traversals!
+using HPC: process_multispace_commands!
+using HPC: save_space!, load_space!, checkpoint_all!
+using HPC: mpi_init!, mpi_finalize!, mpi_rank, mpi_nranks, mpi_active
+using HPC: mpi_send_traverse!, mpi_poll_traverse!, mpi_broadcast_traverse!, mpi_barrier!
+using HPC: mpi_allreduce_sum, mpi_allgatherv_strings, mpi_bcast_bytes!
+using HPC: TRAVERSE_TAG, RESULT_TAG
+using HPC: ShardedSpace, new_sharded_space
+using HPC: sharded_add!, sharded_flush!, sharded_query, sharded_val_count
+using HPC: shard_owner, SHARD_ATOM_TAG
 include("mgfw/GeometryTemplate.jl")
 include("mgfw/SchemaRegistry.jl")
 include("mgfw/FactorGeometry.jl")
