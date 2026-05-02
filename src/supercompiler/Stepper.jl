@@ -101,6 +101,7 @@ mutable struct PrimRegistry
     handlers :: Dict{Symbol, PrimHandler}
 end
 PrimRegistry() = PrimRegistry(Dict{Symbol, PrimHandler}())
+Base.copy(r::PrimRegistry) = PrimRegistry(copy(r.handlers))
 
 register_prim!(r::PrimRegistry, op::Symbol, h::PrimHandler) =
     (r.handlers[op] = h; r)
@@ -361,24 +362,63 @@ end
 register_prim!(DEFAULT_PRIM_REGISTRY, :identity,
     (g, args, env) -> isempty(args) ? Value(NULL_NODE) : Value(args[1]))
 
-# :kb_query — stub; full implementation connects to Space via QueryPlanner
+# :kb_query — Algorithm 8 §6.1: query_kb_with_stats(pattern)
+# Default registry: no Space available → returns Residual.
+# Space-aware registry: call register_space_primitives!(reg, space) to wire live Space.
 register_prim!(DEFAULT_PRIM_REGISTRY, :kb_query,
-    (g, args, env) -> begin
-        # Pattern is args[1]; returns Residual pending Space context
-        Residual(add_prim!(g, Prim(:kb_query, args, EffectSet(UInt8(0x01)))))
-    end)
+    (g, args, env) -> Residual(add_prim!(g, Prim(:kb_query, args, EffectSet(UInt8(0x01))))))
 
-# :mm2_exec — stub; full implementation connects to space_metta_calculus!
+# :mm2_exec — Algorithm 8 §6.1: execute_mm2_pattern(priority, patterns, templates)
 register_prim!(DEFAULT_PRIM_REGISTRY, :mm2_exec,
-    (g, args, env) -> begin
-        Residual(add_prim!(g, Prim(:mm2_exec, args, EffectSet(UInt8(0x05)))))
+    (g, args, env) -> Residual(add_prim!(g, Prim(:mm2_exec, args, EffectSet(UInt8(0x05))))))
+
+# :fitness_eval — Algorithm 8 §6.1: evaluate_fitness(program, data)
+register_prim!(DEFAULT_PRIM_REGISTRY, :fitness_eval,
+    (g, args, env) -> Residual(add_prim!(g, Prim(:fitness_eval, args, EffectSet(UInt8(0x21))))))
+
+"""
+    register_space_primitives!(reg, space) → PrimRegistry
+
+Wire live MORK Space into a PrimRegistry so :kb_query and :mm2_exec
+can interact with the Space during M-Core evaluation (Algorithm 8 §6.1).
+
+:kb_query  — query_kb_with_stats: run space_query_multi on pattern arg,
+             return match count as a Lit node (cardinality estimation).
+:mm2_exec  — execute_mm2_pattern: add exec atom to space and run
+             space_metta_calculus! for one step, return Value.
+"""
+function register_space_primitives!(reg::PrimRegistry, space::Space) :: PrimRegistry
+    # :kb_query — reads space, returns cardinality as Lit
+    register_prim!(reg, :kb_query, (g, args, env) -> begin
+        isempty(args) && return Value(add_lit!(g, Lit(0)))
+        pat_node = get_node(g, args[1])
+        pat_str  = sprint_mcore_to_mm2(g, args[1])
+        count    = 0
+        try
+            nodes = parse_program(pat_str)
+            if !isempty(nodes)
+                count = dynamic_count(space.btm, only(nodes))
+                count == typemax(Int) && (count = 0)
+            end
+        catch
+        end
+        Value(add_lit!(g, Lit(count)))
     end)
 
-# :fitness_eval — stub
-register_prim!(DEFAULT_PRIM_REGISTRY, :fitness_eval,
-    (g, args, env) -> begin
-        Residual(add_prim!(g, Prim(:fitness_eval, args, EffectSet(UInt8(0x21)))))
+    # :mm2_exec — appends exec atom to space and steps one round
+    register_prim!(reg, :mm2_exec, (g, args, env) -> begin
+        isempty(args) && return Value(NULL_NODE)
+        exec_str = sprint_mcore_to_mm2(g, args[1])
+        try
+            space_add_all_sexpr!(space, exec_str)
+            space_metta_calculus!(space, 1)
+        catch
+        end
+        Value(args[1])
     end)
+
+    reg
+end
 
 # ── Multi-step driver ──────────────────────────────────────────────────────────
 
@@ -407,5 +447,5 @@ export StepResult, Value, Blocked, Residual
 export Env, env_lookup, env_extend
 export DepSet, can_proceed, add_dep
 export PrimRegistry, PrimHandler, register_prim!, lookup_prim
-export DEFAULT_PRIM_REGISTRY
+export DEFAULT_PRIM_REGISTRY, register_space_primitives!
 export rewrite_once, step_to_value

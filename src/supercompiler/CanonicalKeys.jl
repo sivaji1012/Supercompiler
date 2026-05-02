@@ -160,15 +160,108 @@ struct CanonicalPathSig
     effect_sig :: CanonicalEffectSig
 end
 
-"""Build a CanonicalPathSig from a node in the graph."""
+"""Build a CanonicalPathSig from a node in the graph.
+
+Implements Algorithm 10 §6.3 — populates kb_sig and effect_sig by
+traversing the MCoreGraph subtree (bounded to depth 4):
+  kb_sig     — predicates accessed via :kb_query Prim nodes
+  effect_sig — effect classes from all Prim nodes in the subtree
+"""
 function canonical_key(g::MCoreGraph, id::NodeID, depth::Int=0) :: CanonicalPathSig
     !isvalid(id) && return CanonicalPathSig(:null, CompactShape(), Symbol[], depth,
                                             CanonicalKBSig(), CanonicalEffectSig())
-    node  = get_node(g, id)
-    head  = _node_head(node)
-    shape = extract_shape(g, id)
-    tags  = sort!(_collect_tags(g, id, 3))
-    CanonicalPathSig(head, shape, tags, depth, CanonicalKBSig(), CanonicalEffectSig())
+    node     = get_node(g, id)
+    head     = _node_head(node)
+    shape    = extract_shape(g, id)
+    tags     = sort!(_collect_tags(g, id, 3))
+    kb_sig   = _collect_kb_sig(g, id, 4)
+    eff_sig  = _collect_effect_sig(g, id, 4)
+    CanonicalPathSig(head, shape, tags, depth, kb_sig, eff_sig)
+end
+
+# ── Algorithm 10 helpers — KB and Effect signature extraction ──────────────────
+
+"""
+Traverse the subtree (bounded depth) collecting :kb_query predicate accesses.
+For each Prim(:kb_query, [pattern_id, ...]):
+  - extract the predicate head from pattern_id (first Con/Sym child)
+  - build a FixedArgMask for which arg positions are ground (Sym/Lit) vs free (Var)
+"""
+function _collect_kb_sig(g::MCoreGraph, id::NodeID, max_depth::Int) :: CanonicalKBSig
+    max_depth <= 0 || !isvalid(id) && return CanonicalKBSig()
+    preds = Dict{Symbol, FixedArgMask}()
+    _traverse_kb_sig!(g, id, max_depth, preds)
+    isempty(preds) && return CanonicalKBSig()
+    pred_list = sort!([(p, m) for (p, m) in preds]; by=first)
+    access = reduce(|, (m.bits for (_, m) in pred_list); init=UInt32(0))
+    CanonicalKBSig(pred_list, access)
+end
+
+function _traverse_kb_sig!(g, id, depth, preds)
+    !isvalid(id) || depth <= 0 && return
+    node = get_node(g, id)
+    if node isa Prim && node.op == :kb_query && !isempty(node.args)
+        pat_id = node.args[1]
+        isvalid(pat_id) || return
+        pat = get_node(g, pat_id)
+        if pat isa Con && isvalid(pat.head)
+            head_node = get_node(g, _sym_node_of(g, pat.head))
+            pred = pat.head isa Symbol ? pat.head : :unknown
+            mask = FixedArgMask()
+            for (i, arg_id) in enumerate(pat.args)
+                isvalid(arg_id) || continue
+                arg_node = get_node(g, arg_id)
+                if arg_node isa Sym || arg_node isa Lit
+                    mask = set_fixed(mask, i)
+                end
+            end
+            existing = get(preds, pred, FixedArgMask())
+            preds[pred] = FixedArgMask(existing.bits | mask.bits)
+        end
+    end
+    for cid in _node_children(node)
+        _traverse_kb_sig!(g, cid, depth - 1, preds)
+    end
+end
+
+_sym_node_of(g, s::Symbol) = NULL_NODE  # head is already a symbol in Con
+
+"""
+Traverse the subtree collecting effect classes from all Prim nodes.
+"""
+function _collect_effect_sig(g::MCoreGraph, id::NodeID, max_depth::Int) :: CanonicalEffectSig
+    max_depth <= 0 || !isvalid(id) && return CanonicalEffectSig()
+    effects   = EffectClass[]
+    resources = Symbol[]
+    _traverse_effect_sig!(g, id, max_depth, effects, resources)
+    isempty(effects) && return CanonicalEffectSig()
+    sort!(effects); unique!(effects)
+    sort!(resources); unique!(resources)
+    CanonicalEffectSig(effects, resources)
+end
+
+function _traverse_effect_sig!(g, id, depth, effects, resources)
+    !isvalid(id) || depth <= 0 && return
+    node = get_node(g, id)
+    if node isa Prim
+        eset = node.effects
+        for eff in _effectset_to_effects(eset)
+            push!(effects, effect_class(eff))
+        end
+    end
+    for cid in _node_children(node)
+        _traverse_effect_sig!(g, cid, depth - 1, effects, resources)
+    end
+end
+
+function _effectset_to_effects(eset::EffectSet) :: Vector{<:Effect}
+    effs = Effect[]
+    mask = eset.mask
+    mask & 0x01 != 0 && push!(effs, ReadEffect(DEFAULT_SPACE))
+    mask & 0x04 != 0 && push!(effs, AppendEffect(DEFAULT_SPACE))
+    mask & 0x02 != 0 && push!(effs, WriteEffect(DEFAULT_SPACE))
+    mask & 0x20 != 0 && push!(effs, ObserveEffect(DEFAULT_SPACE))
+    effs
 end
 
 _node_head(n::Sym)       = n.name

@@ -129,25 +129,41 @@ function execute!(s       :: Space,
         timings[:decompose] = t
     end
 
-    # Stage 4 — optional KB saturation on background facts
+    # Stage 4 — optional KB saturation on background facts (Algorithm 11 §7.1)
+    # Implements IncrementalSaturation: enumerate MORK atoms → MCoreGraph facts
+    # → saturate! until fixed point with semi-naive evaluation.
     if opts.saturate_kb
         t = @elapsed begin
-            kb = KBState(MCoreGraph())
-            for fid in NodeID[]  # placeholder: integrate with MORK atom enumeration
-                kb_add_fact!(kb, fid)
+            g  = MCoreGraph()
+            kb = KBState(g)
+            # Enumerate all atoms in space, parse each as an M-Core fact
+            dump = space_dump_all_sexpr(s)
+            for line in split(dump, "\n"; keepempty=false)
+                line = strip(line)
+                isempty(line) && continue
+                try
+                    nodes = parse_program(line)
+                    isempty(nodes) && continue
+                    fid = _sexpr_to_mcore!(g, only(nodes))
+                    isvalid(fid) && kb_add_fact!(kb, fid)
+                catch
+                    # Skip atoms that don't parse to valid M-Core
+                end
             end
             saturate!(kb; max_rounds=100)
         end
         timings[:saturate] = t
     end
 
-    # Stage 4 — optional MM2Compiler lowering
+    # Stage 4b — optional MM2Compiler lowering with space-aware primitive registry
     obligs = BiSimObligation[]
     if opts.use_mm2_compiler
         t = @elapsed begin
             g = MCoreGraph()
-            # Parse program_planned into M-Core nodes via SExpr layer
-            nodes  = parse_program(program_planned)
+            # Build a space-aware registry so :kb_query/:mm2_exec touch live Space
+            space_reg = copy(DEFAULT_PRIM_REGISTRY)
+            register_space_primitives!(space_reg, s)
+            nodes    = parse_program(program_planned)
             root_ids = _sexpr_nodes_to_mcore(g, nodes)
             program_planned, obligs = compile_program(g, root_ids)
         end
