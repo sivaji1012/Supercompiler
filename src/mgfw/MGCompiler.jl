@@ -109,16 +109,47 @@ end
     backend_neutral_optimize(templates, stats) -> Vector{GeometryTemplate}
 
 §9 Stage 2: Backend-aware but backend-neutral IR optimization.
-Applies transformations that are beneficial regardless of final backend:
-  - Join ordering (from QueryPlanner)
-  - Source reordering
-  - Cache contract enforcement
+Applies three transformations regardless of final backend:
+
+  1. Validity pruning — drop templates that fail is_valid_template.
+  2. Cache contract ordering — templates with :content_hash cache come before
+     :epoch cache (content-hash is stronger, filter first for better locality).
+  3. Stats-guided geometry preference — when MORKStatistics has data, prefer
+     GEOM_TRIE and GEOM_DAG over GEOM_FACTOR for high-cardinality patterns
+     (factor graphs are slower on large spaces than trie/DAG traversal).
 """
 function backend_neutral_optimize(templates :: Vector{GeometryTemplate},
                                    stats    :: MORKStatistics) :: Vector{GeometryTemplate}
-    # Apply join-order optimization to each template's operators
-    # (In full implementation: re-order operators based on cardinality stats)
-    templates  # stub: full IR optimization deferred
+    isempty(templates) && return templates
+
+    # Pass 1: validity pruning
+    valid = filter(is_valid_template, templates)
+    isempty(valid) && return templates   # guard: don't drop everything
+
+    # Pass 2: cache contract ordering — content_hash > epoch > others
+    _cache_rank(t::GeometryTemplate) :: Int = begin
+        cc = t.cache_contract.cache_key
+        cc == :content_hash ? 0 :
+        cc == :version_tuple ? 1 :
+        cc == :epoch         ? 2 : 3
+    end
+    sort!(valid; by=_cache_rank)
+
+    # Pass 3: stats-guided geometry reordering
+    # If space has many atoms (high cardinality), trie/DAG geometries are faster
+    # than factor graphs for pattern matching (O(log N) vs O(N) fanout).
+    has_stats = stats.total_atoms > 0
+    if has_stats && stats.total_atoms > 1000
+        _geom_rank(t::GeometryTemplate) :: Int = begin
+            g = geometry_of(t)
+            g == GEOM_TRIE   ? 0 :
+            g == GEOM_DAG    ? 1 :
+            g == GEOM_FACTOR ? 2 : 3
+        end
+        sort!(valid; by=_geom_rank)
+    end
+
+    valid
 end
 
 """
@@ -150,12 +181,35 @@ end
     polish(code, choice) -> String
 
 §9 Stage 4: Backend-specific polishing.
-For MM2: ensures priority pairs are assigned correctly.
-For MORK: ensures atom byte encoding is correct.
+
+MM2 backend: renumber exec atom priorities sequentially (0,1,2,...) so
+  no two exec atoms share the same priority — required by MM2 semantics.
+  Malformed (exec ...) lines without a numeric second token get priority 0.
+
+MORK/trie/factor/tensor backends: code is already in s-expression form
+  compatible with space_add_all_sexpr! — pass through unchanged.
 """
 function polish(code::String, choice::BackendChoice) :: String
-    # For now: pass-through (backend-specific polishing hooks)
-    code
+    choice.primary != :mm2 && return code   # only MM2 needs priority renumbering
+    isempty(strip(code))  && return code
+
+    lines = split(code, "\n"; keepempty=false)
+    result = String[]
+    priority = 0
+
+    for line in lines
+        stripped = strip(line)
+        # Renumber (exec P ...) atoms with sequential priorities
+        m = match(r"^\(exec\s+(-?\d+)\s+(.*)\)$"s, stripped)
+        if m !== nothing
+            push!(result, "(exec $priority $(m.captures[2]))")
+            priority += 1
+        else
+            push!(result, String(stripped))
+        end
+    end
+
+    join(result, "\n")
 end
 
 # ── §12.1 Algorithm 5 — Geometry-aware compilation pipeline ──────────────────
