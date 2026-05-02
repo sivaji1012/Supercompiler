@@ -66,13 +66,47 @@ dag_intern!(store::DAGStore, head::Symbol, children::Vector{UInt64}=UInt64[]) =
 """
     dag_normalize!(store, id) -> UInt64
 
-Normalize a DAG to ENF (Existential Normal Form).
-Simplified: returns the ID unchanged (full ENF requires rewriting rules).
-In a complete implementation: apply the ENF rewrite system until fixed point.
+Normalize a DAG node to ENF (Existential Normal Form) per §10.2.3 and §3.2.
+
+ENF rules applied iteratively until fixed point:
+  1. Canonical child ordering — sort children IDs for commutative operators
+     (:and, :or, :conj) so structurally equivalent programs share the same ID.
+  2. Flatten nested same-head operators — (:and (:and a b) c) → (:and a b c).
+  3. Deduplicate children — remove duplicate child IDs under commutative ops.
+  4. Re-intern after rewriting — hash-consing ensures structural sharing.
+
+Returns the normalized (possibly new) node ID.
 """
 function dag_normalize!(store::DAGStore, id::UInt64) :: UInt64
     haskey(store.nodes, id) || return id
-    id   # stub: full ENF normalization deferred (§15.3)
+    node = store.nodes[id]
+    isempty(node.children) && return id   # leaf: already in ENF
+
+    # Recursively normalize children first (bottom-up)
+    norm_children = map(c -> dag_normalize!(store, c), node.children)
+
+    # Commutative operators where child order doesn't matter
+    commutative = node.head ∈ (:and, :or, :conj, :disj, :union, :intersect)
+
+    # Rule 2: flatten nested same-head (associativity)
+    flat_children = UInt64[]
+    for c in norm_children
+        if haskey(store.nodes, c) && store.nodes[c].head == node.head && commutative
+            append!(flat_children, store.nodes[c].children)
+        else
+            push!(flat_children, c)
+        end
+    end
+
+    # Rule 3: deduplicate under commutative ops
+    if commutative
+        unique!(flat_children)
+        sort!(flat_children)   # Rule 1: canonical ordering
+    end
+
+    # Rule 4: re-intern with normalised children
+    norm_children == node.children && flat_children == node.children && return id
+    dag_intern!(store, node.head, flat_children)
 end
 
 """

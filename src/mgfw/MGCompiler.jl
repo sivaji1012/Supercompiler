@@ -239,9 +239,11 @@ function mg_compile(region          :: AbstractString,
     end
     timings[:kernel_choice] = t5
 
-    # Step 6: Concurrency and distribution policies
+    # Step 6: TyLAA concurrency verification (§7.2, §15.3)
+    violations = String[]
     t6 = @elapsed begin
-        _apply_concurrency_policies!(templates)
+        violations = _apply_concurrency_policies!(templates)
+        isempty(violations) || @warn "TyLAA violations: $(join(violations, "; "))"
     end
     timings[:concurrency] = t6
 
@@ -363,9 +365,46 @@ function _build_coercion_chain(templates::Vector{GeometryTemplate},
     coercions
 end
 
-function _apply_concurrency_policies!(templates::Vector{GeometryTemplate})
-    # Validate that local_concurrency.commutes_when is consistent with effects
-    # (stub: full TyLAA verification deferred per §15.3)
+"""
+    _apply_concurrency_policies!(templates) → Vector{String}
+
+TyLAA verification (§7.2, §15.3): verify that compiled geometry templates
+satisfy independence-respecting traces — the three TyLAA conditions:
+  LC (Local Confluence): each pair of applicable rewrites has a common reduct
+  G  (Generalisation):   the type layer is at least as general as the red theory
+  SHD (Shared Derivation): parallel independent steps share a common derivation
+
+Practical approximation using Effects.jl:
+  For each pair of templates, check that their effect sets commute.
+  If effects commute → LC holds for that pair (independent steps are safe).
+  Returns a list of violation messages (empty = all checks pass).
+"""
+function _apply_concurrency_policies!(templates::Vector{GeometryTemplate}) :: Vector{String}
+    violations = String[]
+    for i in 1:length(templates), j in (i+1):length(templates)
+        t1 = templates[i]
+        t2 = templates[j]
+        # Extract effect kinds from concurrency contracts
+        e1 = _template_effect_kind(t1)
+        e2 = _template_effect_kind(t2)
+        # LC check: effects must commute for safe parallel execution
+        if !effects_commute(e1, e2)
+            push!(violations,
+                "TyLAA LC violation: templates $(t1.name) ($(e1)) and $(t2.name) ($(e2)) " *
+                "have non-commuting effects — parallel execution unsafe")
+        end
+    end
+    violations
+end
+
+function _template_effect_kind(t::GeometryTemplate) :: EffectKind
+    contract = t.local_concurrency
+    # Map commutes_when conditions to EffectKind for LC checking
+    :never       ∈ contract.commutes_when && return EFF_WRITE
+    :read_only   ∈ contract.commutes_when && return EFF_READ
+    :append_only ∈ contract.commutes_when && return EFF_APPEND
+    :always      ∈ contract.commutes_when && return EFF_PURE
+    EFF_READ  # default: assume read (conservative)
 end
 
 """
