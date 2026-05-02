@@ -166,8 +166,11 @@ function _step_node(g, id, node::Var,      env, deps, reg) :: StepResult
 end
 
 function _step_node(g, id, node::MCoreRef, env, deps, reg) :: StepResult
-    # Unfold definition — for now return Residual (definition lookup deferred)
-    Residual(id)
+    # Algorithm 7 §6.1: Ref(def) -> unfold_definition(def)
+    # Look up def_id in g.defs. If found, return Value(body_id).
+    # If not found, return Residual — definition may be loaded later.
+    body_id = def_lookup(g, node.def_id)
+    body_id !== nothing ? Value(body_id) : Residual(id)
 end
 
 function _step_node(g, id, node::Con,      env, deps, reg) :: StepResult
@@ -415,6 +418,43 @@ function register_space_primitives!(reg::PrimRegistry, space::Space) :: PrimRegi
         catch
         end
         Value(args[1])
+    end)
+
+    # Populate g.defs from MORK equality atoms: (= name body) or (= (name $x) body)
+    # Called lazily — MCoreGraph is passed per-call so we register a hook that
+    # loads definitions on first MCoreRef unfold miss.
+    register_prim!(reg, :load_defs, (g, args, env) -> begin
+        dump = space_dump_all_sexpr(space)
+        for line in split(dump, "\n"; keepempty=false)
+            line = strip(line)
+            startswith(line, "(= ") || continue
+            try
+                nodes = parse_program(line)
+                isempty(nodes) && continue
+                node = only(nodes)
+                # (= name body) or (= (name ...) body)
+                node isa SList && length(node.items) == 3 || continue
+                eq_head = node.items[1]
+                lhs     = node.items[2]
+                rhs_str = sprint_sexpr(node.items[3])
+                # Extract definition name
+                def_name = if lhs isa SAtom
+                    Symbol(lhs.name)
+                elseif lhs isa SList && !isempty(lhs.items) && lhs.items[1] isa SAtom
+                    Symbol((lhs.items[1]::SAtom).name)
+                else
+                    nothing
+                end
+                def_name === nothing && continue
+                # Parse rhs into MCoreGraph and register
+                rhs_nodes = parse_program(rhs_str)
+                isempty(rhs_nodes) && continue
+                body_id = compile_kb_query(g, only(rhs_nodes))
+                isvalid(body_id) && def_add!(g, def_name, body_id)
+            catch
+            end
+        end
+        Value(NULL_NODE)
     end)
 
     reg

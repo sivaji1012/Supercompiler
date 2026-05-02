@@ -117,3 +117,49 @@ end
     @test env_lookup(env, 1) == id_b
     @test !isvalid(env_lookup(env, 9))
 end
+
+@testset "Stepper — MCoreRef unfold (Algorithm 7 §6.1)" begin
+    g = MCoreGraph()
+
+    # Register a definition: :double → Lit(42)
+    body_id = add_lit!(g, Lit(42))
+    def_add!(g, :double, body_id)
+
+    # MCoreRef to :double should unfold to Value(body_id)
+    ref_id = add_mref!(g, MCoreRef(:double))
+    r = rewrite_once(g, ref_id, Env())
+    @test r isa Value
+    @test (r::Value).id == body_id
+
+    # MCoreRef to unknown symbol → Residual (definition not yet loaded)
+    ref_unknown = add_mref!(g, MCoreRef(:unknown_def))
+    r2 = rewrite_once(g, ref_unknown, Env())
+    @test r2 isa Residual
+
+    # def_lookup returns nothing for missing, body_id for present
+    @test def_lookup(g, :double)      == body_id
+    @test def_lookup(g, :missing_def) === nothing
+end
+
+@testset "Stepper — def_add! / def_lookup round-trip" begin
+    g   = MCoreGraph()
+    id1 = add_sym!(g, Sym(:foo))
+    id2 = add_lit!(g, Lit(99))
+    def_add!(g, :foo_def, id1)
+    def_add!(g, :bar_def, id2)
+    @test def_lookup(g, :foo_def) == id1
+    @test def_lookup(g, :bar_def) == id2
+    @test def_lookup(g, :none)   === nothing
+    # Overwrite existing
+    def_add!(g, :foo_def, id2)
+    @test def_lookup(g, :foo_def) == id2
+end
+
+@testset "Stepper — register_space_primitives! copy isolation" begin
+    # copy() creates an independent registry — mutations don't leak
+    reg1 = copy(DEFAULT_PRIM_REGISTRY)
+    reg2 = copy(DEFAULT_PRIM_REGISTRY)
+    register_prim!(reg1, :test_only, (g, a, e) -> Value(NULL_NODE))
+    @test lookup_prim(reg1, :test_only) !== nothing
+    @test lookup_prim(reg2, :test_only) === nothing   # reg2 unaffected
+end

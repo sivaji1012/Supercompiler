@@ -299,12 +299,34 @@ mutable struct MCoreGraph
     # Map from NodeID.idx → (type_tag::UInt8, type_index::Int)
     index    :: Vector{Tuple{UInt8, Int}}
     next_id  :: UInt32
+    # Definition store: symbol name → body NodeID (for MCoreRef unfold)
+    # Populated by def_add! or by register_space_primitives! from MORK atoms.
+    defs     :: Dict{Symbol, NodeID}
 end
 
 MCoreGraph() = MCoreGraph(
     Sym[], Var[], Lit[],
     Con[], App[], Abs[], LetNode[], MatchNode[], Choice[], Prim[], MCoreRef[],
-    Tuple{UInt8,Int}[], UInt32(1))
+    Tuple{UInt8,Int}[], UInt32(1), Dict{Symbol,NodeID}())
+
+"""
+    def_add!(g, name, body_id) → NodeID
+
+Register a named definition in the MCoreGraph so MCoreRef nodes can unfold it.
+`name` is the definition symbol; `body_id` is the NodeID of the definition body.
+"""
+function def_add!(g::MCoreGraph, name::Symbol, body_id::NodeID) :: NodeID
+    g.defs[name] = body_id
+    body_id
+end
+
+"""
+    def_lookup(g, name) → Union{NodeID, Nothing}
+
+Look up a named definition. Returns the body NodeID or nothing if undefined.
+"""
+def_lookup(g::MCoreGraph, name::Symbol) :: Union{NodeID, Nothing} =
+    get(g.defs, name, nothing)
 
 # Type tags
 const TAG_SYM = UInt8(1); const TAG_VAR = UInt8(2); const TAG_LIT = UInt8(3)
@@ -391,7 +413,7 @@ export NodeID, NULL_NODE, EffectSet, SpaceID, DEFAULT_SPACE
 export MCoreNode, Sym, Var, Lit, Con, App, Abs, LetNode, MatchNode, MatchClause
 export Choice, ChoiceAlt, Prim, MCoreRef
 export PBox, UncertainNode
-export MCoreGraph
+export MCoreGraph, def_add!, def_lookup
 export add_sym!, add_var!, add_lit!, add_con!, add_app!, add_abs!
 export add_let!, add_match!, add_choice!, add_prim!, add_mref!
 export get_node
