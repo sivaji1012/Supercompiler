@@ -303,5 +303,8 @@ export TRAVERSE_TAG, RESULT_TAG
 export ShardedSpace, new_sharded_space
 export sharded_add!, sharded_flush!, sharded_query, sharded_val_count
 export shard_owner, SHARD_ATOM_TAG
+# MORK Space re-exports (for test convenience)
+export Space, new_space
+export space_add_all_sexpr!, space_metta_calculus!, space_dump_all_sexpr, space_val_count
 
 end # module

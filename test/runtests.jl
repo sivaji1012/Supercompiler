@@ -28,6 +28,7 @@ using MorkSupercompiler
 
     # ── Code Generation ───────────────────────────────────────────────────────
     include("codegen/test_mm2_compiler.jl")
+    include("codegen/test_space_primitives.jl")
 
     # ── Integration ───────────────────────────────────────────────────────────
     include("integration/test_pipeline.jl")
