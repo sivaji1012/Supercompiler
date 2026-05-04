@@ -117,3 +117,43 @@ end
     @test !isempty(dtrans_dec)
     @test dtrans_orig == dtrans_dec   # same result
 end
+
+@testset "SCPipeline — use_approx=true runs Stage 2b and returns ApproxPipelineResult" begin
+    facts = "(edge 0 1) (edge 1 2) (edge 2 3)"
+    prog  = raw"(exec 0 (, (edge $x $y) (edge $y $z)) (, (trans $x $z)))"
+
+    s, r = execute(facts, prog; opts=SCOptions(use_approx=true, error_tol=0.05))
+
+    @test r isa SCResult
+    @test r.approx_result isa ApproxPipelineResult
+    @test haskey(r.timings, :approx)
+    @test r.approx_result.within_tolerance
+    @test r.approx_result.error_budget_used >= 0.0
+end
+
+@testset "SCPipeline — use_approx=false leaves approx_result as nothing" begin
+    _, r = execute("(a 1)", raw"(exec 0 (, (a \$x)) (, (b \$x)))";
+                   opts=SCOptions(use_approx=false))
+    @test r.approx_result === nothing
+    @test !haskey(r.timings, :approx)
+end
+
+@testset "SCPipeline — approx + decompose combined" begin
+    facts = "(edge 0 1) (edge 1 2) (edge 2 3)"
+    prog  = raw"(exec 0 (, (edge $x $y) (edge $y $z) (edge $z $w)) (, (path3 $x $w)))"
+
+    s, r = execute(facts, prog;
+                   opts=SCOptions(use_approx=true, decompose=true, error_tol=0.1))
+    @test r isa SCResult
+    @test r.approx_result isa ApproxPipelineResult
+    @test !isempty(r.program_planned)
+end
+
+@testset "SCPipeline — timing_report includes approx line when active" begin
+    _, r = execute("(foo 1) (foo 2) (foo 3)",
+                   raw"(exec 0 (, (foo $x) (foo $y) (foo $z)) (, (triple $x $y $z)))";
+                   opts=SCOptions(use_approx=true, error_tol=0.05, max_steps=1))
+    rep = timing_report(r)
+    @test occursin("approx", rep)
+    @test occursin("within_tol", rep)
+end

@@ -2,7 +2,7 @@
 SCPipeline — end-to-end supercompiler pipeline.
 
 Closes the loop from spec §10.4 (Production Hardening):
-  stats → plan → decompose → (optional KB saturation) → compile → execute
+  stats → plan → [approx rewrite] → decompose → (optional KB saturation) → compile → execute
 
 A single `execute!` call replaces the manual sequence of:
   collect_stats → plan_program → decompose_program →
@@ -13,6 +13,7 @@ and adds bisimulation obligation recording, timing, and replanning support.
 Pipeline stages (all optional, controlled via SCOptions):
   1. STATS     — collect MORKStatistics from the space (or use cached)
   2. PLAN      — QueryPlanner join-order optimization (Algorithm 6)
+  2b. APPROX   — ApproxPipeline 4-phase rewrite with error bounds (§6, Goertzel Oct 2025)
   3. DECOMPOSE — PipelineDecompose: split N-source conjunctions → chained
                  2-source stages (Rule-of-64 fix, O(K^N)→O(K^2) per stage)
   4. SATURATE  — KBSaturation incremental saturation on background facts
@@ -32,6 +33,8 @@ Controls which pipeline stages are active and their parameters.
 struct SCOptions
     collect_stats         :: Bool     # Stage 1: collect MORKStatistics
     plan_join_order       :: Bool     # Stage 2: QueryPlanner reordering
+    use_approx_pipeline   :: Bool     # Stage 2b: ApproxPipeline error-bounded rewrite
+    error_tolerance       :: Float64  # Stage 2b: max acceptable approximation error
     decompose_multi_source:: Bool     # Stage 3: PipelineDecompose (Rule-of-64 fix)
     saturate_kb           :: Bool     # Stage 4: KBSaturation on background
     use_mm2_compiler      :: Bool     # Stage 5: lower through MM2Compiler
@@ -44,14 +47,16 @@ end
 SCOptions(; max_steps   = typemax(Int),
             plan        = true,
             stats       = true,
+            use_approx  = false,
+            error_tol   = 0.05,
             decompose   = true,
             saturate    = false,
             mm2_compile = false,
             sample_frac = 1.0,
             budget      = SPLIT_DEFAULT_BUDGET,
             cleanup     = true) =
-    SCOptions(stats, plan, decompose, saturate, mm2_compile, max_steps,
-              sample_frac, budget, cleanup)
+    SCOptions(stats, plan, use_approx, error_tol, decompose, saturate, mm2_compile,
+              max_steps, sample_frac, budget, cleanup)
 
 const SC_DEFAULTS = SCOptions()
 
@@ -78,6 +83,7 @@ struct SCResult
     program_planned   :: String
     n_atoms_original  :: Int   # atom count before decomposition
     n_atoms_decomposed:: Int   # atom count after decomposition (≥ original)
+    approx_result     :: Union{Nothing, ApproxPipelineResult}  # Stage 2b output (nothing if skipped)
 end
 
 # ── Main pipeline entry point ─────────────────────────────────────────────────
@@ -116,6 +122,17 @@ function execute!(s       :: Space,
         (planned, pstr)
     else
         (String(program), "")
+    end
+
+    # Stage 2b — approximate pipeline rewrite (§6, Goertzel Oct 2025)
+    approx_res = nothing
+    if opts.use_approx_pipeline
+        t = @elapsed begin
+            approx_res      = run_approx_pipeline(s, program_planned;
+                                                   error_tolerance = opts.error_tolerance)
+            program_planned = approx_res.program_approx
+        end
+        timings[:approx] = t
     end
 
     # Stage 3 — pipeline decomposition (Rule-of-64 fix)
@@ -161,8 +178,10 @@ function execute!(s       :: Space,
         t = @elapsed begin
             g = MCoreGraph()
             # Build a space-aware registry so :kb_query/:mm2_exec touch live Space
+            # Also wire approx primitives (:approx_kb_query, :sample_fitness) if active
             space_reg = copy(DEFAULT_PRIM_REGISTRY)
             register_space_primitives!(space_reg, s)
+            opts.use_approx_pipeline && register_approx_primitives!(space_reg)
             nodes    = parse_program(program_planned)
             root_ids = _sexpr_nodes_to_mcore(g, nodes)
             program_planned, obligs = compile_program(g, root_ids)
@@ -184,7 +203,7 @@ function execute!(s       :: Space,
     end
 
     SCResult(steps, stats, plan_str, obligs, timings, program_planned,
-             n_atoms_original, n_atoms_decomposed)
+             n_atoms_original, n_atoms_decomposed, approx_res)
 end
 
 """
@@ -199,9 +218,11 @@ function execute(facts   :: AbstractString,
                 steps   :: Int = typemax(Int)) :: Tuple{Space, SCResult}
     s = new_space()
     space_add_all_sexpr!(s, facts)
-    opts2 = SCOptions(opts.collect_stats, opts.plan_join_order, opts.decompose_multi_source,
-                      opts.saturate_kb, opts.use_mm2_compiler, steps,
-                      opts.stats_sample_frac, opts.split_budget, opts.cleanup_intermediates)
+    opts2 = SCOptions(opts.collect_stats, opts.plan_join_order,
+                      opts.use_approx_pipeline, opts.error_tolerance,
+                      opts.decompose_multi_source, opts.saturate_kb, opts.use_mm2_compiler,
+                      steps, opts.stats_sample_frac, opts.split_budget,
+                      opts.cleanup_intermediates)
     result = execute!(s, program; opts=opts2)
     (s, result)
 end
@@ -276,6 +297,10 @@ function timing_report(r::SCResult) :: String
     !isempty(r.obligs) && println(io, "  bisim_obligs: $(length(r.obligs))")
     r.n_atoms_decomposed > r.n_atoms_original &&
         println(io, "  decomposed:   $(r.n_atoms_original) → $(r.n_atoms_decomposed) atoms")
+    if r.approx_result !== nothing
+        ar = r.approx_result
+        println(io, "  approx:       error_used=$(round(ar.error_budget_used; digits=4))  within_tol=$(ar.within_tolerance)")
+    end
     String(take!(io))
 end
 

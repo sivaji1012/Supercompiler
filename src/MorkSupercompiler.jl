@@ -63,19 +63,19 @@ include("supercompiler/KBSaturation.jl")
 include("supercompiler/EvoSpecializer.jl")
 include("codegen/MM2Compiler.jl")
 
+# Layer 8 — Approximate Supercompilation (Doc 2, approx spec)
+# Must be included before SCPipeline (SCResult references ApproxPipelineResult)
+include("approx/PBoxAlgebra.jl")
+include("approx/UncertainQuery.jl")
+include("approx/UncertainInference.jl")
+include("approx/ApproxMOSES.jl")
+include("approx/ApproxPipeline.jl")
+
 # Layer 7 — Integration + Production Hardening (§10.4)
 include("integration/SCPipeline.jl")
 include("integration/Profiler.jl")
 include("integration/Explainer.jl")
 include("integration/AdaptivePlanner.jl")
-
-# Layer 8 — Approximate Supercompilation (Doc 2, approx spec)
-include("approx/PBoxAlgebra.jl")
-
-include("approx/UncertainQuery.jl")
-include("approx/UncertainInference.jl")
-include("approx/ApproxMOSES.jl")
-include("approx/ApproxPipeline.jl")
 
 # Layer 9 — Multi-Geometry Framework (Doc 3, mg_framework_spec)
 include("mgfw/SemanticObjects.jl")
