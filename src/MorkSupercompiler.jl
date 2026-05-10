@@ -96,6 +96,12 @@ using HPC: TRAVERSE_TAG, RESULT_TAG
 using HPC: ShardedSpace, new_sharded_space
 using HPC: sharded_add!, sharded_flush!, sharded_query, sharded_val_count
 using HPC: shard_owner, SHARD_ATOM_TAG
+
+# MORKTensorNetworks — semiring algebra for principled geometry selection (ADR-055)
+using MORKTensorNetworks: AbstractSemiring,
+    BooleanSemiring, MaxPlusSemiring, MinPlusSemiring,
+    SumProductSemiring, PLNSemiring, CostSemiring,
+    semiring_matmul, oplus, otimes, szero
 include("mgfw/GeometryTemplate.jl")
 include("mgfw/SchemaRegistry.jl")
 include("mgfw/FactorGeometry.jl")

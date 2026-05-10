@@ -367,4 +367,13 @@ export DistributedExecContract, default_distributed_exec
 export CacheContract, GeometryTemplate
 export is_valid_template, geometry_of, all_geometries, is_hybrid, policy_families
 export make_template
-export TEMPLATE_HEURISTIC_MP, TEMPLATE_EVIDENCE_CAPSULE
+const TEMPLATE_CAUSAL_DAG = make_template(
+    :CausalDAG,
+    sem_rel(:Cause, :Effect),
+    GEOM_DAG;
+    operators = [:topo_sort, :ancestor_query, :path_score],
+    effects   = [ReadEffect(DEFAULT_SPACE)],
+    laws      = [:acyclic, :topological_order],
+    cache     = CacheContract([:dag_cid, :path_hash], [:edge_add]))
+
+export TEMPLATE_HEURISTIC_MP, TEMPLATE_EVIDENCE_CAPSULE, TEMPLATE_CAUSAL_DAG

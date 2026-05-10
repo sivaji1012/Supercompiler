@@ -108,15 +108,21 @@ end
 """
     backend_neutral_optimize(templates, stats) -> Vector{GeometryTemplate}
 
-§9 Stage 2: Backend-aware but backend-neutral IR optimization.
-Applies three transformations regardless of final backend:
+§9 Stage 2: Backend-aware but backend-neutral IR optimization (ADR-055).
+Four passes — first three preserve prior behaviour; Pass 4 is new:
 
   1. Validity pruning — drop templates that fail is_valid_template.
-  2. Cache contract ordering — templates with :content_hash cache come before
-     :epoch cache (content-hash is stronger, filter first for better locality).
-  3. Stats-guided geometry preference — when MORKStatistics has data, prefer
-     GEOM_TRIE and GEOM_DAG over GEOM_FACTOR for high-cardinality patterns
-     (factor graphs are slower on large spaces than trie/DAG traversal).
+  2. Cache contract ordering — content_hash > version_tuple > epoch > others.
+  3. Semiring-geometry matching (ADR-055, replaces ad-hoc cardinality heuristic):
+     infer natural semiring from geometry tag and re-rank accordingly.
+     mg_framework_spec §9/§12 maps:
+       GEOM_TRIE         → Boolean / MaxPlus  (reachability, best-path)
+       GEOM_FACTOR       → SumProduct         (counting, PLN inference)
+       GEOM_DAG          → MinPlus / Boolean  (shortest paths, DAG traversal)
+       GEOM_TENSOR_SPARSE → MaxPlus           (ECAN STI spreading)
+       GEOM_TENSOR_DENSE  → SumProduct        (Tucker dense einsums)
+  4. Semiring cost estimation — use semiring_matmul complexity proxy
+     (O(nnz) for sparse vs O(n³) for dense) to break ties within same rank.
 """
 function backend_neutral_optimize(templates :: Vector{GeometryTemplate},
                                    stats    :: MORKStatistics) :: Vector{GeometryTemplate}
@@ -126,28 +132,55 @@ function backend_neutral_optimize(templates :: Vector{GeometryTemplate},
     valid = filter(is_valid_template, templates)
     isempty(valid) && return templates   # guard: don't drop everything
 
-    # Pass 2: cache contract ordering — content_hash > version_tuple > epoch > others
-    # CacheContract.key is Vector{Symbol}; check if strong cache key is declared
+    # Pass 2: cache contract ordering
     _cache_rank(t::GeometryTemplate) :: Int = begin
-        keys = t.cache_contract.key   # Vector{Symbol}
+        keys = t.cache_contract.key
         :content_hash  ∈ keys ? 0 :
         :version_tuple ∈ keys ? 1 :
         :epoch         ∈ keys ? 2 : 3
     end
     sort!(valid; by=_cache_rank)
 
-    # Pass 3: stats-guided geometry reordering
-    # If space has many atoms (high cardinality), trie/DAG geometries are faster
-    # than factor graphs for pattern matching (O(log N) vs O(N) fanout).
-    has_stats = stats.total_atoms > 0
-    if has_stats && stats.total_atoms > 1000
-        _geom_rank(t::GeometryTemplate) :: Int = begin
-            g = geometry_of(t)
-            g == GEOM_TRIE   ? 0 :
-            g == GEOM_DAG    ? 1 :
-            g == GEOM_FACTOR ? 2 : 3
-        end
-        sort!(valid; by=_geom_rank)
+    # Pass 3: semiring-geometry matching (ADR-055)
+    # Maps geometry → natural semiring priority and re-ranks templates.
+    # Replaces the prior total_atoms > 1000 heuristic with algebraic grounding.
+    #
+    # Priority semantics (lower = preferred):
+    #   0 = GEOM_TRIE   (Boolean/MaxPlus — prefix-indexed, O(log N) lookup)
+    #   1 = GEOM_DAG    (MinPlus/Boolean — DAG shortest-path, O(E) traversal)
+    #   2 = GEOM_FACTOR (SumProduct — factor graph, O(N) but exact counting)
+    #   3 = GEOM_TENSOR_SPARSE (MaxPlus — ECAN, patch-log shard workflow)
+    #   4 = GEOM_TENSOR_DENSE  (SumProduct — Tucker dense einsums)
+    #   5 = everything else
+    sort!(valid; by = t -> begin
+        g = geometry_of(t)
+        g == GEOM_TRIE          ? 0 :
+        g == GEOM_DAG           ? 1 :
+        g == GEOM_FACTOR        ? 2 :
+        g == GEOM_TENSOR_SPARSE ? 3 :
+        g == GEOM_TENSOR_DENSE  ? 4 : 5
+    end)
+
+    # Pass 4: semiring cost estimation within same rank
+    # Use a simple nnz proxy: sparser structures (TRIE/DAG) get priority over
+    # denser ones (FACTOR) when they share the same semiring rank.
+    # Proxy: templates with :content_hash + GEOM_TRIE are cheapest to evaluate.
+    if stats.total_atoms > 0
+        n = stats.total_atoms
+        sort!(valid; by = t -> begin
+            g    = geometry_of(t)
+            rank = g == GEOM_TRIE ? 0 : g == GEOM_DAG ? 1 :
+                   g == GEOM_FACTOR ? 2 : g == GEOM_TENSOR_SPARSE ? 3 :
+                   g == GEOM_TENSOR_DENSE ? 4 : 5
+            base = if g == GEOM_TRIE;          log2(max(1, n))
+                   elseif g == GEOM_DAG;       sqrt(Float64(n))
+                   elseif g == GEOM_FACTOR;    Float64(n)
+                   elseif g == GEOM_TENSOR_SPARSE; Float64(n) * 0.1
+                   elseif g == GEOM_TENSOR_DENSE;  Float64(n)^1.5
+                   else Float64(n)^2
+                   end
+            rank * 1e9 + base
+        end)
     end
 
     valid

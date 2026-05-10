@@ -276,6 +276,36 @@ end
 
 # ── §9 + §12 MGCompiler ──────────────────────────────────────────────────────
 
+@testset "MGCompiler — backend_neutral_optimize (ADR-055 semiring-geometry)" begin
+    # Use canonical valid templates (HEURISTIC_MP=FACTOR, EVIDENCE_CAPSULE=TRIE, CAUSAL_DAG=DAG)
+    t_factor = TEMPLATE_HEURISTIC_MP       # GEOM_FACTOR, rank 2
+    t_trie   = TEMPLATE_EVIDENCE_CAPSULE   # GEOM_TRIE,   rank 0
+    t_dag    = TEMPLATE_CAUSAL_DAG         # GEOM_DAG,    rank 1
+
+    # All three should be valid
+    @test is_valid_template(t_factor)
+    @test is_valid_template(t_trie)
+    @test is_valid_template(t_dag)
+
+    # Pass 3: semiring rank — TRIE(0) < DAG(1) < FACTOR(2)
+    result = backend_neutral_optimize([t_factor, t_dag, t_trie], MORKStatistics())
+    geoms  = geometry_of.(result)
+    @test geoms[1] == GEOM_TRIE    # rank 0: Boolean/MaxPlus — reachability
+    @test geoms[2] == GEOM_DAG     # rank 1: MinPlus — shortest paths
+    @test geoms[3] == GEOM_FACTOR  # rank 2: SumProduct — counting/inference
+
+    # Pass 4: cost proxy with stats — trie still wins (log n < n)
+    stats   = MORKStatistics(Dict{String,Int}(), 5000)  # immutable struct
+    result2 = backend_neutral_optimize([t_factor, t_trie], stats)
+    @test geometry_of(result2[1]) == GEOM_TRIE
+
+    # Pass 1: validity pruning — result only contains valid templates
+    @test all(is_valid_template, result)
+
+    # Empty input guard
+    @test backend_neutral_optimize(GeometryTemplate[], MORKStatistics()) == GeometryTemplate[]
+end
+
 @testset "MGCompiler — affinity_analysis" begin
     templates = [TEMPLATE_HEURISTIC_MP, TEMPLATE_EVIDENCE_CAPSULE]
     profile   = affinity_analysis(templates)
